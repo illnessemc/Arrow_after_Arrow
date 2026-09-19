@@ -57,21 +57,22 @@ GENERATED_SPECS: tuple[GeneratedLevelSpec, ...] = (
     GeneratedLevelSpec(
         "初级回路", 22, 16, seed=20260921,
         min_arrow_length=2, max_arrow_length=13, boundary_break_chance=0.55,
-        path_mix_factor=1,
+        path_mix_factor=0,
     ),
     GeneratedLevelSpec(
         "折返迷阵", 26, 18, seed=20260922,
         min_arrow_length=2, max_arrow_length=15, boundary_break_chance=0.4,
-        path_mix_factor=1,
+        path_mix_factor=0,
     ),
     GeneratedLevelSpec(
         "密集交织", 30, 20, seed=20260923,
         min_arrow_length=2, max_arrow_length=18, boundary_break_chance=0.25,
-        path_mix_factor=1,
+        path_mix_factor=0,
     ),
     GeneratedLevelSpec(
         "异形挑战", 30, 20, seed=20260924,
         min_arrow_length=2, max_arrow_length=10, boundary_break_chance=0.2,
+        path_mix_factor=0,
         playable_cells=raised_board_cells(30, 20),
     ),
 )

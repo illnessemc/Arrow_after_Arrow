@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import random
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Protocol
 
 from arrow_game.core import BoardLayout, Direction, Level, LevelRole
@@ -68,6 +69,61 @@ class GeneratedLevel:
     attempts: int
 
 
+@dataclass(frozen=True, slots=True)
+class LevelQualityPolicy:
+    """自动关卡的最低质量门槛，避免生成单一方向的重复堆叠。"""
+
+    min_secondary_axis_ratio: float = 0.3
+    min_bent_arrow_ratio: float = 0.3
+    min_short_arrow_ratio: float = 0.1
+    max_average_choice_ratio: float = 0.18
+    min_each_direction: int = 2
+
+    def accepts(self, level: Level, report: SolveReport) -> bool:
+        arrow_count = len(level.arrows)
+        if arrow_count < 16:
+            return True
+
+        horizontal = sum(
+            arrow.direction in (Direction.LEFT, Direction.RIGHT)
+            for arrow in level.arrows
+        )
+        vertical = arrow_count - horizontal
+        if min(horizontal, vertical) / arrow_count < self.min_secondary_axis_ratio:
+            return False
+
+        direction_counts = {
+            direction: sum(arrow.direction is direction for arrow in level.arrows)
+            for direction in Direction
+        }
+        if min(direction_counts.values()) < self.min_each_direction:
+            return False
+
+        bent = sum(self._turn_count(arrow.cells) > 0 for arrow in level.arrows)
+        if bent / arrow_count < self.min_bent_arrow_ratio:
+            return False
+
+        short = sum(len(arrow.cells) <= 4 for arrow in level.arrows)
+        if short / arrow_count < self.min_short_arrow_ratio:
+            return False
+
+        return report.average_choices / arrow_count <= self.max_average_choice_ratio
+
+    @staticmethod
+    def _turn_count(cells: tuple[Cell, ...]) -> int:
+        return sum(
+            (
+                cells[index][0] - cells[index - 1][0],
+                cells[index][1] - cells[index - 1][1],
+            )
+            != (
+                cells[index + 1][0] - cells[index][0],
+                cells[index + 1][1] - cells[index][1],
+            )
+            for index in range(1, len(cells) - 1)
+        )
+
+
 class LevelGenerator(Protocol):
     """自动关卡生成器接口，后续算法只需实现相同的入口。"""
 
@@ -78,8 +134,13 @@ class LevelGenerator(Protocol):
 class SerpentineLevelGenerator:
     """生成全覆盖、可复现且保证可解的长折线关卡。"""
 
-    def __init__(self, solver: LevelSolver | None = None) -> None:
+    def __init__(
+        self,
+        solver: LevelSolver | None = None,
+        quality_policy: LevelQualityPolicy | None = None,
+    ) -> None:
         self.solver = solver or LevelSolver()
+        self.quality_policy = quality_policy or LevelQualityPolicy()
 
     def generate(self, spec: GeneratedLevelSpec) -> GeneratedLevel:
         last_report: SolveReport | None = None
@@ -118,7 +179,11 @@ class SerpentineLevelGenerator:
 
             level = builder.build()
             last_report = self.solver.solve(level)
-            if last_report.solved:
+            quality_ok = (
+                spec.playable_cells is not None
+                or self.quality_policy.accepts(level, last_report)
+            )
+            if last_report.solved and quality_ok:
                 return GeneratedLevel(
                     level=level,
                     report=last_report,
@@ -128,7 +193,8 @@ class SerpentineLevelGenerator:
 
         remaining = last_report.remaining_arrow_ids if last_report else ()
         raise ValueError(
-            f"关卡 {spec.name} 在 {spec.max_generation_attempts} 次内未生成可解布局，"
+            f"关卡 {spec.name} 在 {spec.max_generation_attempts} 次内未生成满足"
+            f"可解性与质量门槛的布局，"
             f"最后剩余箭头：{remaining}"
         )
 
@@ -139,18 +205,105 @@ class SerpentineLevelGenerator:
         randomizer: random.Random,
     ) -> tuple[tuple[Cell, ...], ...]:
         """为布局生成一组互不重叠、完整覆盖的连续路径。"""
-        if len(layout.playable_cells) == layout.rows * layout.cols:
-            path = self._board_path(layout.rows, layout.cols, randomizer)
-            return (
-                self._mix_path(
-                    path,
-                    layout.rows,
-                    layout.cols,
-                    len(path) * spec.path_mix_factor,
-                    randomizer,
-                ),
-            )
+        bands = self._rectangular_bands(layout)
+        if bands is not None:
+            paths: list[tuple[Cell, ...]] = []
+            for index, (top, bottom, left, right) in enumerate(bands):
+                path = self._rect_path(
+                    top,
+                    bottom,
+                    left,
+                    right,
+                    horizontal=index % 2 == 0,
+                    randomizer=randomizer,
+                )
+                paths.append(
+                    self._mix_path(
+                        path,
+                        len(path) * spec.path_mix_factor,
+                        randomizer,
+                    )
+                )
+            return tuple(paths)
         return self._row_run_paths(layout, randomizer)
+
+    @staticmethod
+    def _rectangular_bands(
+        layout: BoardLayout,
+    ) -> tuple[tuple[int, int, int, int], ...] | None:
+        """把行凸布局识别为矩形带，并将过高区域再一分为二。"""
+        raw_bands: list[tuple[int, int, int, int]] = []
+        current: tuple[int, int, int] | None = None
+        for row in range(layout.rows):
+            columns = sorted(
+                col for cell_row, col in layout.playable_cells if cell_row == row
+            )
+            if not columns or columns != list(range(columns[0], columns[-1] + 1)):
+                return None
+            signature = (columns[0], columns[-1] + 1)
+            if current is None:
+                current = (row, *signature)
+            elif signature != current[1:]:
+                raw_bands.append((current[0], row, current[1], current[2]))
+                current = (row, *signature)
+        if current is not None:
+            raw_bands.append((current[0], layout.rows, current[1], current[2]))
+
+        if len(layout.playable_cells) != layout.rows * layout.cols:
+            shaped_bands: list[tuple[int, int, int, int]] = []
+            for top, bottom, left, right in raw_bands:
+                if bottom - top >= 16:
+                    middle = top + (bottom - top) // 2
+                    shaped_bands.extend(
+                        ((top, middle, left, right), (middle, bottom, left, right))
+                    )
+                else:
+                    shaped_bands.append((top, bottom, left, right))
+            return tuple(shaped_bands)
+
+        bands: list[tuple[int, int, int, int]] = []
+        for top, bottom, left, right in raw_bands:
+            cursor = top
+            # 控制每个区域高度，令横向和纵向路径在整张地图中多次交替，
+            # 而不是简单形成“上半全横、下半全竖”的两块堆叠。
+            while bottom - cursor > 7:
+                bands.append((cursor, cursor + 6, left, right))
+                cursor += 6
+            bands.append((cursor, bottom, left, right))
+        return tuple(bands)
+
+    @staticmethod
+    def _rect_path(
+        top: int,
+        bottom: int,
+        left: int,
+        right: int,
+        *,
+        horizontal: bool,
+        randomizer: random.Random,
+    ) -> tuple[Cell, ...]:
+        """按指定主方向生成覆盖一个矩形带的连续路径。"""
+        rows = bottom - top
+        cols = right - left
+        if horizontal:
+            path = [
+                (top + row, left + col)
+                for row in range(rows)
+                for col in (
+                    range(cols) if row % 2 == 0 else range(cols - 1, -1, -1)
+                )
+            ]
+        else:
+            path = [
+                (top + row, left + col)
+                for col in range(cols)
+                for row in (
+                    range(rows) if col % 2 == 0 else range(rows - 1, -1, -1)
+                )
+            ]
+        if randomizer.choice((True, False)):
+            path.reverse()
+        return tuple(path)
 
     @staticmethod
     def _row_run_paths(
@@ -188,43 +341,8 @@ class SerpentineLevelGenerator:
         return tuple(paths)
 
     @staticmethod
-    def _board_path(
-        rows: int,
-        cols: int,
-        randomizer: random.Random,
-    ) -> tuple[Cell, ...]:
-        """生成覆盖矩形的连续蛇形路径，并随机改变主方向和镜像。"""
-        horizontal = randomizer.choice((True, False))
-        if horizontal:
-            path = [
-                (row, col)
-                for row in range(rows)
-                for col in (
-                    range(cols) if row % 2 == 0 else range(cols - 1, -1, -1)
-                )
-            ]
-        else:
-            path = [
-                (row, col)
-                for col in range(cols)
-                for row in (
-                    range(rows) if col % 2 == 0 else range(rows - 1, -1, -1)
-                )
-            ]
-
-        if randomizer.choice((True, False)):
-            path = [(rows - 1 - row, col) for row, col in path]
-        if randomizer.choice((True, False)):
-            path = [(row, cols - 1 - col) for row, col in path]
-        if randomizer.choice((True, False)):
-            path.reverse()
-        return tuple(path)
-
-    @staticmethod
     def _mix_path(
         path: tuple[Cell, ...],
-        rows: int,
-        cols: int,
         steps: int,
         randomizer: random.Random,
     ) -> tuple[Cell, ...]:
@@ -295,10 +413,11 @@ class SerpentineLevelGenerator:
             if points_outside(end) and randomizer.random() < boundary_break_chance
         }
 
-        def partition(start: int) -> list[tuple[Cell, ...]] | None:
+        @lru_cache(maxsize=None)
+        def partition(start: int) -> tuple[tuple[Cell, ...], ...] | None:
             remaining = count - start
             if minimum <= remaining <= maximum:
-                return [path[start:]]
+                return (path[start:],)
 
             candidates = [
                 end
@@ -314,7 +433,7 @@ class SerpentineLevelGenerator:
             for end in candidates:
                 tail = partition(end + 1)
                 if tail is not None:
-                    return [path[start : end + 1], *tail]
+                    return (path[start : end + 1], *tail)
             return None
 
         parts = partition(0)
@@ -322,4 +441,4 @@ class SerpentineLevelGenerator:
             raise ValueError(
                 f"无法用长度 {minimum}~{maximum} 切分 {count} 格路径"
             )
-        return tuple(parts)
+        return parts

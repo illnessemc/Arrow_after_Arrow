@@ -5,6 +5,7 @@ from .generator import (
     GeneratedLevel,
     GeneratedLevelSpec,
     LevelGenerator,
+    LevelQualityPolicy,
     SerpentineLevelGenerator,
 )
 from .levels import GENERATED_LEVELS, LEVELS
@@ -15,6 +16,7 @@ __all__ = [
     "GeneratedLevel",
     "GeneratedLevelSpec",
     "LevelGenerator",
+    "LevelQualityPolicy",
     "LevelBuilder",
     "ManualLevelBuilder",
     "SerpentineLevelGenerator",
