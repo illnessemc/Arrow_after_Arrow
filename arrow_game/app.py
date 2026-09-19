@@ -83,9 +83,8 @@ class TrailPulse:
     """箭头飞过网格点时短暂放大的光点。"""
 
     cell: tuple[int, int]
-    color: tuple[int, int, int]
     elapsed: float = 0.0
-    duration: float = 0.38
+    duration: float = 0.52
 
     @property
     def done(self) -> bool:
@@ -192,7 +191,7 @@ class ArrowGameApp:
                 self.model.board.cells_to_edge(arrow.head, arrow.direction)
             )
             movement_cells = len(edge_cells) + len(arrow.cells)
-            duration = min(0.95, 0.24 + movement_cells * 0.026)
+            duration = min(1.55, 0.36 + movement_cells * 0.045)
             self.animations.append(
                 ArrowAnimation(
                     AnimationKind.FLY,
@@ -248,9 +247,7 @@ class ArrowGameApp:
             )
             while active.emitted_steps < min(passed_steps, len(active.trail_cells)):
                 cell = active.trail_cells[active.emitted_steps]
-                self.trail_pulses.append(
-                    TrailPulse(cell, self.arrow_colors[active.arrow.arrow_id])
-                )
+                self.trail_pulses.append(TrailPulse(cell))
                 active.emitted_steps += 1
             # 大棋盘连续操作时也限制瞬时特效数量，已结束的光点会优先丢弃。
             if len(self.trail_pulses) > 512:
@@ -442,24 +439,42 @@ class ArrowGameApp:
         head = body_points[-1]
         neck = head + direction * self.cell_size * 0.04
         tip = head + direction * self.cell_size * 0.36
-        wing = self.cell_size * 0.18
-        width = max(4, int(self.cell_size * 0.085))
+        wing = self.cell_size * 0.15
+        width = max(4, round(self.cell_size * 0.16))
 
         if len(body_points) == 1:
             tail = head - direction * self.cell_size * 0.28
             shaft_points = [tail, neck]
         else:
             tail = body_points[0]
-            shaft_points = [*body_points, neck]
+            # 连续直线上的格点不需要逐个绘制端帽，否则会呈现珠串状凸点。
+            shaft_points = [*self._simplify_polyline(body_points), neck]
 
-        # 每段分别绘制并在连接点补圆，比 draw.lines 的尖锐折角更接近原版。
+        # 每段分别绘制并在连接点补圆，形成连续、圆润的折线身体。
         for start, end in zip(shaft_points, shaft_points[1:]):
             pygame.draw.line(self.screen, color, start, end, width=width)
         for joint in shaft_points:
-            pygame.draw.circle(self.screen, color, joint, width // 2)
+            pygame.draw.circle(self.screen, color, joint, width // 2 + 1)
         points = [tip, neck + perpendicular * wing, neck - perpendicular * wing]
         pygame.draw.polygon(self.screen, color, points)
-        pygame.draw.circle(self.screen, color, tail, width // 2)
+        # 尾端比箭身略粗，避免看起来像由字符拼成的细线箭头。
+        pygame.draw.circle(self.screen, color, tail, max(width // 2 + 2, 4))
+
+    @staticmethod
+    def _simplify_polyline(
+        points: Sequence[pygame.Vector2],
+    ) -> list[pygame.Vector2]:
+        """只保留首尾与转角点，使长直线保持完全平滑。"""
+        if len(points) <= 2:
+            return [point.copy() for point in points]
+        simplified = [points[0].copy()]
+        for previous, current, following in zip(points, points[1:], points[2:]):
+            before = current - previous
+            after = following - current
+            if abs(before.cross(after)) > 0.01 or before.dot(after) <= 0:
+                simplified.append(current.copy())
+        simplified.append(points[-1].copy())
+        return simplified
 
     def _moved_path_points(
         self,
@@ -530,19 +545,23 @@ class ArrowGameApp:
 
     @staticmethod
     def _ease(progress: float) -> float:
-        """首尾速度为零的平滑插值，减少突然启动和停止的生硬感。"""
-        return progress * progress * (3.0 - 2.0 * progress)
+        """五次平滑插值，让箭头像滑动一样柔和启动和停止。"""
+        return progress**3 * (progress * (progress * 6.0 - 15.0) + 10.0)
 
     def _draw_trail_pulses(self) -> None:
         for pulse in self.trail_pulses:
             progress = min(pulse.elapsed / pulse.duration, 1.0)
             strength = math.sin(progress * math.pi)
-            radius = max(2, int(self.cell_size * (0.04 + 0.16 * strength)))
-            color = tuple(
-                int(GRID[channel] + (pulse.color[channel] - GRID[channel]) * strength)
-                for channel in range(3)
+            radius = int(self.cell_size * 0.17 * strength)
+            if radius <= 0:
+                continue
+            # 只使用背景色，效果是网格点被轻轻吞没后恢复，不抢箭头本身。
+            pygame.draw.circle(
+                self.screen,
+                BACKGROUND,
+                self._cell_center(pulse.cell),
+                radius,
             )
-            pygame.draw.circle(self.screen, color, self._cell_center(pulse.cell), radius)
 
     def _draw_text(
         self,
