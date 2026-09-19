@@ -19,16 +19,16 @@ from .data import LEVELS
 WINDOW_SIZE = (920, 760)
 FPS = 60
 
-BACKGROUND = (241, 246, 252)
-PANEL = (255, 255, 255)
-INK = (31, 42, 68)
-MUTED = (100, 116, 139)
-GRID = (213, 224, 238)
-PRIMARY = (61, 109, 245)
-PRIMARY_DARK = (39, 79, 194)
+BACKGROUND = (247, 244, 237)
+PANEL = (253, 251, 246)
+INK = (35, 39, 42)
+MUTED = (111, 108, 101)
+GRID = (207, 202, 191)
+PRIMARY = (66, 92, 78)
+PRIMARY_DARK = (47, 72, 59)
+ARROW_COLOR = (40, 43, 45)
 SUCCESS = (28, 174, 119)
 DANGER = (232, 73, 91)
-GOLD = (245, 174, 45)
 
 
 class ScreenState(Enum):
@@ -221,10 +221,10 @@ class ArrowGameApp:
             self._draw_result()
 
     def _draw_start(self) -> None:
-        pygame.draw.circle(self.screen, (218, 230, 255), (120, 100), 150)
-        pygame.draw.circle(self.screen, (225, 246, 239), (825, 680), 180)
+        pygame.draw.circle(self.screen, (229, 225, 214), (120, 100), 150)
+        pygame.draw.circle(self.screen, (224, 234, 226), (825, 680), 180)
         self._draw_text("一箭又一箭", self.font_title, INK, (460, 190))
-        self._draw_text("点击箭头 · 看清方向 · 逐个解锁", self.font_body, MUTED, (460, 265))
+        self._draw_text("点击折线 · 看清箭头 · 逐步解锁", self.font_body, MUTED, (460, 265))
 
         card = pygame.Rect(185, 320, 550, 155)
         pygame.draw.rect(self.screen, PANEL, card, border_radius=22)
@@ -266,28 +266,31 @@ class ArrowGameApp:
         restart.draw(self.screen, self.font_small)
         self.buttons.append(restart)
 
-        shadow = self.board_rect.inflate(18, 18).move(0, 6)
-        pygame.draw.rect(self.screen, (218, 226, 238), shadow, border_radius=24)
+        shadow = self.board_rect.inflate(24, 24).move(0, 6)
+        pygame.draw.rect(self.screen, (218, 213, 203), shadow, border_radius=24)
         pygame.draw.rect(self.screen, PANEL, self.board_rect.inflate(18, 18), border_radius=24)
+        pygame.draw.rect(
+            self.screen,
+            (225, 220, 210),
+            self.board_rect.inflate(18, 18),
+            width=1,
+            border_radius=24,
+        )
         for row in range(level.rows):
             for col in range(level.cols):
-                rect = pygame.Rect(
-                    self.board_rect.x + col * self.cell_size,
-                    self.board_rect.y + row * self.cell_size,
-                    self.cell_size,
-                    self.cell_size,
-                )
                 if not level.layout.contains((row, col)):
-                    pygame.draw.rect(self.screen, BACKGROUND, rect)
                     continue
-                if (row + col) % 2 == 0:
-                    pygame.draw.rect(self.screen, (249, 251, 255), rect)
-                pygame.draw.rect(self.screen, GRID, rect, width=1)
+                pygame.draw.circle(
+                    self.screen,
+                    GRID,
+                    self._cell_center((row, col)),
+                    max(2, int(self.cell_size * 0.035)),
+                )
 
         animated_id = self.animation.arrow.arrow_id if self.animation else None
         for arrow in self.model.board.arrows:
             if arrow.arrow_id != animated_id:
-                self._draw_arrow(arrow, PRIMARY)
+                self._draw_arrow(arrow, ARROW_COLOR)
 
         if self.animation is not None:
             self._draw_animation(self.animation)
@@ -307,7 +310,7 @@ class ArrowGameApp:
         detail = (
             "失误机会已经用完，再观察一下箭头方向吧"
             if is_failure
-            else ("三个关卡全部完成，你已经掌握核心玩法" if is_final else "所有箭头都飞出了棋盘")
+            else ("全部关卡已完成，你已经掌握核心玩法" if is_final else "所有箭头都飞出了棋盘")
         )
 
         pygame.draw.circle(self.screen, (*accent[:3],), (460, 205), 72)
@@ -361,7 +364,7 @@ class ArrowGameApp:
         neck = head + direction * self.cell_size * 0.04
         tip = head + direction * self.cell_size * 0.36
         wing = self.cell_size * 0.18
-        width = max(7, int(self.cell_size * 0.13))
+        width = max(4, int(self.cell_size * 0.085))
 
         if len(body_points) == 1:
             tail = head - direction * self.cell_size * 0.28
@@ -377,32 +380,32 @@ class ArrowGameApp:
         pygame.draw.polygon(self.screen, color, points)
         pygame.draw.circle(self.screen, color, tail, width // 2)
 
-    def _flight_points(self, arrow: Arrow, progress: float) -> list[pygame.Vector2]:
-        """计算折线箭头逐格向头部方向抽出时的身体位置。
+    def _moved_path_points(
+        self,
+        arrow: Arrow,
+        movement: float,
+    ) -> list[pygame.Vector2]:
+        """计算折线箭头沿自身轨迹前进指定格数后的身体位置。
 
-        将原路径、头部到边界的路径和棋盘外延长线拼成一条轨迹，再让一个
-        与箭头等长的窗口沿轨迹滑动。这样头部先前进，后续身体逐段跟随，
-        转角会自然被拉直，而不是把整条折线僵硬地平移出去。
+        将原路径和头部前方的延长线拼成一条轨迹，再让一个与箭头等长的
+        窗口沿轨迹滑动。头部先前进，身体逐段跟随，转角会自然被拉直。
         """
         direction = (arrow.direction.row_step, arrow.direction.col_step)
-        exit_cells = list(self.model.board.cells_to_edge(arrow.head, arrow.direction))
-        trajectory = list(arrow.cells) + exit_cells
+        trajectory = list(arrow.cells)
         cursor = trajectory[-1]
 
-        # 多补一个格子供最后一帧插值，最终整支箭头都会处在棋盘外。
-        for _ in range(len(arrow.cells) + 1):
+        required_steps = math.ceil(movement) + 1
+        for _ in range(required_steps):
             cursor = (cursor[0] + direction[0], cursor[1] + direction[1])
             trajectory.append(cursor)
 
-        total_shifts = len(exit_cells) + len(arrow.cells)
-        movement = progress * total_shifts
-        step = min(int(movement), total_shifts)
+        step = int(movement)
         fraction = movement - step
 
         result: list[pygame.Vector2] = []
         for index in range(len(arrow.cells)):
             current = self._cell_center(trajectory[step + index])
-            if fraction > 0 and step < total_shifts:
+            if fraction > 0:
                 following = self._cell_center(trajectory[step + index + 1])
                 current = current.lerp(following, fraction)
             result.append(current)
@@ -415,17 +418,38 @@ class ArrowGameApp:
         direction = pygame.Vector2(d_col, d_row)
 
         if animation.kind == "fly":
-            moving_points = self._flight_points(animation.arrow, progress)
-            color = SUCCESS if progress < 0.22 else PRIMARY
+            exit_distance = len(
+                tuple(
+                    self.model.board.cells_to_edge(
+                        animation.arrow.head,
+                        animation.arrow.direction,
+                    )
+                )
+            )
+            total_movement = exit_distance + len(animation.arrow.cells)
+            moving_points = self._moved_path_points(
+                animation.arrow,
+                progress * total_movement,
+            )
+            color = SUCCESS if progress < 0.18 else ARROW_COLOR
             self._draw_arrow(animation.arrow, color, points=moving_points)
             return
         else:
-            bump = math.sin(progress * math.pi) * self.cell_size * 0.13
-            shake = math.sin(progress * math.pi * 7) * self.cell_size * 0.035
+            empty_distance = 0
+            for cell in self.model.board.cells_to_edge(
+                animation.arrow.head,
+                animation.arrow.direction,
+            ):
+                occupant = self.model.board.arrow_at(cell)
+                if occupant is not None and occupant.arrow_id != animation.arrow.arrow_id:
+                    break
+                empty_distance += 1
+            probe = math.sin(progress * math.pi) * (empty_distance + 0.18)
+            moving_points = self._moved_path_points(animation.arrow, probe)
+            shake = math.sin(progress * math.pi * 7) * self.cell_size * 0.025
             perpendicular = pygame.Vector2(-direction.y, direction.x)
-            offset = direction * bump + perpendicular * shake
-            color = DANGER
-        self._draw_arrow(animation.arrow, color, offset)
+            moving_points = [point + perpendicular * shake for point in moving_points]
+            self._draw_arrow(animation.arrow, DANGER, points=moving_points)
 
     def _draw_text(
         self,

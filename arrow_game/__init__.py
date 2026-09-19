@@ -8,6 +8,7 @@ from .core import (
     GameBoard,
     GameSession,
     Level,
+    LevelSolver,
 )
 
 __all__ = [
@@ -18,4 +19,5 @@ __all__ = [
     "GameBoard",
     "GameSession",
     "Level",
+    "LevelSolver",
 ]

@@ -7,6 +7,7 @@ from .game import ClickResult, GameSession
 from .layout import BoardLayout
 from .level import CoverageMode, Level, LevelRole
 from .rules import ExitRule, StraightExitRule
+from .solver import LevelSolver, SolveReport
 
 __all__ = [
     "Arrow",
@@ -20,6 +21,8 @@ __all__ = [
     "GameSession",
     "Level",
     "LevelRole",
+    "LevelSolver",
+    "SolveReport",
     "StraightExitRule",
 ]
 

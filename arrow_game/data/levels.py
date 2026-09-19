@@ -1,104 +1,86 @@
-"""当前三关的手工关卡数据。
+"""关卡目录：一关手工教学关，加上在线确定性生成的正式关卡。
 
-三关都要求箭头完整覆盖可玩区域。路径按“尾部 -> 头部”填写，解题时按编号
-倒序移除：最后一支先从边界飞出，再逐步释放前面的箭头。
-
-第三关刻意保留为显式手工路径，便于逐格调整正式关卡。后续自动生成器应
-实现 ``LevelBuilder`` 接口，并在生成后继续交给 Level 做重叠和覆盖校验。
+教学关继续显式保存路径，方便讲解和精细调整。正式关只填写尺寸、种子和
+长度范围，实际箭头路径由生成器构造，并在加入目录前通过求解器验证。
 """
 
-from arrow_game.core import BoardLayout, Level, LevelRole
+from arrow_game.core import BoardLayout, Level, LevelRole, LevelSolver
 
 from .builders import ManualLevelBuilder
+from .generator import GeneratedLevel, GeneratedLevelSpec, SerpentineLevelGenerator
 
 
-def build_test_level() -> Level:
-    """4x4 测试关：覆盖直线、折线、点击身体和连锁释放。"""
+def build_tutorial_level() -> Level:
+    """手工 7×9 教学关：用明确的依赖链介绍长折线玩法。"""
     builder = ManualLevelBuilder(
-        "路径测试",
-        BoardLayout.rectangle(4, 4),
-        role=LevelRole.TEST,
-        intro="测试关：蓝色线条是一整支箭，点击任意部位都可选中",
+        "折线入门",
+        BoardLayout.rectangle(7, 9),
+        role=LevelRole.TUTORIAL,
+        intro="教学关：整条折线是一支箭，可点击线段的任意位置",
         mistake_limit=5,
     )
     return (
         builder
-        .add_path("T-1", ((0, 0), (0, 1), (0, 2)))
-        .add_path("T-2", ((0, 3), (1, 3), (1, 2)))
-        .add_path("T-3", ((1, 1), (1, 0), (2, 0), (2, 1)))
-        .add_path("T-4", ((2, 2), (2, 3), (3, 3), (3, 2)))
-        .add_path("T-5", ((3, 1), (3, 0)))
+        .add_path(
+            "T-1",
+            ((0, 0), (0, 1), (0, 2), (0, 3), (0, 4), (0, 5), (0, 6)),
+        )
+        .add_path("T-2", ((0, 7), (0, 8), (1, 8), (1, 7), (1, 6)))
+        .add_path(
+            "T-3",
+            ((1, 5), (1, 4), (1, 3), (1, 2), (1, 1), (1, 0), (2, 0), (2, 1), (2, 2)),
+        )
+        .add_path(
+            "T-4",
+            ((2, 3), (2, 4), (2, 5), (2, 6), (2, 7), (2, 8), (3, 8), (3, 7), (3, 6)),
+        )
+        .add_path(
+            "T-5",
+            ((3, 5), (3, 4), (3, 3), (3, 2), (3, 1), (3, 0), (4, 0), (4, 1), (4, 2)),
+        )
+        .add_path(
+            "T-6",
+            ((4, 3), (4, 4), (4, 5), (4, 6), (4, 7), (4, 8), (5, 8), (5, 7), (5, 6)),
+        )
+        .add_path(
+            "T-7",
+            ((5, 5), (5, 4), (5, 3), (5, 2), (5, 1), (5, 0), (6, 0), (6, 1), (6, 2)),
+        )
+        .add_path("T-8", ((6, 3), (6, 4), (6, 5), (6, 6), (6, 7), (6, 8)))
         .build()
     )
 
 
-def build_tutorial_level() -> Level:
-    """5x5 教学关：箭头更长，继续使用清晰的单链消除顺序。"""
-    builder = ManualLevelBuilder(
-        "折线教学",
-        BoardLayout.rectangle(5, 5),
-        role=LevelRole.TUTORIAL,
-        intro="教学关：先找头部朝向畅通的箭头，再按释放顺序消除",
-        mistake_limit=4,
-    )
-    return (
-        builder
-        .add_path("G-1", ((0, 0), (0, 1), (0, 2)))
-        .add_path("G-2", ((0, 3), (0, 4), (1, 4), (1, 3), (1, 2)))
-        .add_path("G-3", ((1, 1), (1, 0), (2, 0), (2, 1), (2, 2)))
-        .add_path("G-4", ((2, 3), (2, 4), (3, 4), (3, 3), (3, 2)))
-        .add_path("G-5", ((3, 1), (3, 0), (4, 0), (4, 1), (4, 2)))
-        .add_path("G-6", ((4, 3), (4, 4)))
-        .build()
-    )
-
-
-def build_formal_level() -> Level:
-    """7x7 正式关：显式手工填写七支长折线箭头并铺满棋盘。"""
-    builder = ManualLevelBuilder(
-        "回环交错",
-        BoardLayout.rectangle(7, 7),
-        role=LevelRole.FORMAL,
-        intro="正式关：观察长折线之间的依赖，从唯一出口开始拆解",
-        mistake_limit=3,
-    )
-    return (
-        builder
-        .add_path("F-1", ((0, 0), (0, 1), (0, 2), (0, 3), (0, 4)))
-        .add_path(
-            "F-2",
-            ((0, 5), (0, 6), (1, 6), (1, 5), (1, 4), (1, 3), (1, 2)),
-        )
-        .add_path(
-            "F-3",
-            ((1, 1), (1, 0), (2, 0), (2, 1), (2, 2), (2, 3), (2, 4)),
-        )
-        .add_path(
-            "F-4",
-            ((2, 5), (2, 6), (3, 6), (3, 5), (3, 4), (3, 3), (3, 2)),
-        )
-        .add_path(
-            "F-5",
-            ((3, 1), (3, 0), (4, 0), (4, 1), (4, 2), (4, 3), (4, 4)),
-        )
-        .add_path(
-            "F-6",
-            ((4, 5), (4, 6), (5, 6), (5, 5), (5, 4), (5, 3), (5, 2)),
-        )
-        .add_path(
-            "F-7",
-            (
-                (5, 1), (5, 0), (6, 0), (6, 1), (6, 2),
-                (6, 3), (6, 4), (6, 5), (6, 6),
-            ),
-        )
-        .build()
-    )
-
-
-LEVELS: tuple[Level, ...] = (
-    build_test_level(),
-    build_tutorial_level(),
-    build_formal_level(),
+# 新增正式关卡只需要增加一条规格，不再逐格编写路径。
+GENERATED_SPECS: tuple[GeneratedLevelSpec, ...] = (
+    GeneratedLevelSpec(
+        "初级回路", 8, 10, seed=20260921,
+        min_arrow_length=4, max_arrow_length=10, boundary_break_chance=0.55,
+    ),
+    GeneratedLevelSpec(
+        "折返迷阵", 9, 11, seed=20260922,
+        min_arrow_length=5, max_arrow_length=12, boundary_break_chance=0.4,
+    ),
+    GeneratedLevelSpec(
+        "密集交织", 10, 12, seed=20260923,
+        min_arrow_length=5, max_arrow_length=13, boundary_break_chance=0.25,
+    ),
+    GeneratedLevelSpec(
+        "长线挑战", 11, 13, seed=20260924,
+        min_arrow_length=6, max_arrow_length=15, boundary_break_chance=0.15,
+    ),
 )
 
+_solver = LevelSolver()
+_generator = SerpentineLevelGenerator(_solver)
+
+TUTORIAL_LEVEL = build_tutorial_level()
+TUTORIAL_REPORT = _solver.require_solvable(TUTORIAL_LEVEL)
+GENERATED_LEVELS: tuple[GeneratedLevel, ...] = tuple(
+    _generator.generate(spec) for spec in GENERATED_SPECS
+)
+
+LEVELS: tuple[Level, ...] = (
+    TUTORIAL_LEVEL,
+    *(generated.level for generated in GENERATED_LEVELS),
+)
