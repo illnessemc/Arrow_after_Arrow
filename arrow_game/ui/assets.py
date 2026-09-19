@@ -12,7 +12,11 @@ import pygame
 
 
 class AssetProvider(Protocol):
-    """按语义名称提供图片资源的最小接口。"""
+    """按语义名称提供图片资源的最小接口。
+
+    应用当前会查询 ``start_background``、``game_background``、``start_title``
+    和 ``button_<action>``。实际实现可自行决定文件名并负责缓存图片。
+    """
 
     def image(self, key: str) -> pygame.Surface | None:
         ...

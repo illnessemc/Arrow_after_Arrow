@@ -55,15 +55,25 @@ class Button:
     action: str
     primary: bool = True
 
-    def draw(self, surface: pygame.Surface, font: pygame.font.Font) -> None:
+    def draw(
+        self,
+        surface: pygame.Surface,
+        font: pygame.font.Font,
+        background_image: pygame.Surface | None = None,
+    ) -> None:
         hovered = self.rect.collidepoint(pygame.mouse.get_pos())
-        if self.primary:
-            color = PRIMARY_DARK if hovered else PRIMARY
+        if background_image is not None:
+            image = pygame.transform.smoothscale(background_image, self.rect.size)
+            surface.blit(image, self.rect)
             text_color = INK
         else:
-            color = PANEL_LIGHT if hovered else PANEL
-            text_color = INK
-        pygame.draw.rect(surface, color, self.rect, border_radius=14)
+            if self.primary:
+                color = PRIMARY_DARK if hovered else PRIMARY
+                text_color = INK
+            else:
+                color = PANEL_LIGHT if hovered else PANEL
+                text_color = INK
+            pygame.draw.rect(surface, color, self.rect, border_radius=14)
         label = font.render(self.text, True, text_color)
         surface.blit(label, label.get_rect(center=self.rect.center))
 
@@ -106,6 +116,7 @@ class ArrowGameApp:
         self.buttons: list[Button] = []
         self.arrow_colors: dict[str, tuple[int, int, int]] = {}
         self.running = True
+        self._closed = False
 
     @staticmethod
     def _font(size: int, bold: bool = False) -> pygame.font.Font:
@@ -124,8 +135,19 @@ class ArrowGameApp:
                 self._draw()
                 pygame.display.flip()
         finally:
-            # 显式清空将来可能由图片资源实现维护的缓存，再释放 Pygame。
-            self.assets.clear()
+            self.close()
+
+    def close(self) -> None:
+        """幂等释放运行期引用、素材缓存和 Pygame 子系统。"""
+        if self._closed:
+            return
+        self._closed = True
+        self.animations.clear()
+        self.trail_pulses.clear()
+        self.arrow_colors.clear()
+        self.buttons.clear()
+        self.assets.clear()
+        if pygame.get_init():
             pygame.quit()
 
     def _start_level(self, index: int) -> None:
@@ -297,7 +319,7 @@ class ArrowGameApp:
             self._draw_text(line, self.font_small, INK, (400, 415 + index * 52))
 
         button = Button(pygame.Rect(275, 640, 250, 68), "开始游戏", "start")
-        button.draw(self.screen, self.font_button)
+        self._draw_button(button, self.font_button)
         self.buttons.append(button)
         self._draw_text("ESC 退出游戏", self.font_small, MUTED, (400, 790))
 
@@ -312,7 +334,7 @@ class ArrowGameApp:
         self._draw_lives((400, 84), self.model.mistakes_left, level.mistake_limit)
 
         restart = Button(pygame.Rect(24, 27, 112, 48), "重新开始", "restart", False)
-        restart.draw(self.screen, self.font_small)
+        self._draw_button(restart, self.font_small)
         self.buttons.append(restart)
 
         pygame.draw.line(self.screen, GRID, (0, 112), (WINDOW_SIZE[0], 112), width=2)
@@ -374,12 +396,20 @@ class ArrowGameApp:
             primary = Button(pygame.Rect(275, 550, 250, 62), "再玩一次", "start")
         else:
             primary = Button(pygame.Rect(275, 550, 250, 62), "下一关", "next")
-        primary.draw(self.screen, self.font_button)
+        self._draw_button(primary, self.font_button)
         self.buttons.append(primary)
 
         home = Button(pygame.Rect(275, 635, 250, 56), "返回首页", "home", False)
-        home.draw(self.screen, self.font_small)
+        self._draw_button(home, self.font_small)
         self.buttons.append(home)
+
+    def _draw_button(self, button: Button, font: pygame.font.Font) -> None:
+        """优先使用 ``button_<action>`` 素材，没有时回退到 Pygame 图元。"""
+        button.draw(
+            self.screen,
+            font,
+            background_image=self.assets.image(f"button_{button.action}"),
+        )
 
     def _cell_center(self, cell: tuple[int, int]) -> pygame.Vector2:
         row, col = cell
