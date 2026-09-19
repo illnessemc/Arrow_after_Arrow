@@ -264,13 +264,16 @@ class ArrowGameApp:
     def _layout_board(self) -> None:
         level = self.model.level
         available_width = WINDOW_SIZE[0] - 92
-        available_height = 745
-        self.cell_size = int(min(available_width / level.cols, available_height / level.rows))
+        available_height = 850
+        self.cell_size = min(
+            46,
+            int(min(available_width / level.cols, available_height / level.rows)),
+        )
         width = self.cell_size * level.cols
         height = self.cell_size * level.rows
         self.board_rect = pygame.Rect(
             (WINDOW_SIZE[0] - width) // 2,
-            135 + (available_height - height) // 2,
+            125 + (available_height - height) // 2,
             width,
             height,
         )
@@ -368,10 +371,6 @@ class ArrowGameApp:
         if active is not None:
             self._draw_animation(active)
 
-        pygame.draw.line(self.screen, GRID, (0, 902), (WINDOW_SIZE[0], 902), width=2)
-        self._draw_text("提示", self.font_small, INK, (90, 950))
-        self._draw_text("缩放  −   ●   +", self.font_small, MUTED, (400, 950))
-        self._draw_text("辅助线", self.font_small, INK, (710, 950))
 
     def _draw_result(self) -> None:
         is_failure = self.state == ScreenState.FAILED

@@ -11,44 +11,32 @@ from .generator import GeneratedLevel, GeneratedLevelSpec, SerpentineLevelGenera
 
 
 def build_tutorial_level() -> Level:
-    """手工 7×9 教学关：用明确的依赖链介绍长折线玩法。"""
+    """手工 12×10 教学关：长折线与短箭头交替形成明确依赖。"""
     builder = ManualLevelBuilder(
         "折线入门",
-        BoardLayout.rectangle(7, 9),
+        BoardLayout.rectangle(12, 10),
         role=LevelRole.TUTORIAL,
-        intro="教学关：整条折线是一支箭，可点击线段的任意位置",
+        intro="",
         mistake_limit=5,
     )
-    return (
-        builder
-        .add_path(
-            "T-1",
-            ((0, 0), (0, 1), (0, 2), (0, 3), (0, 4), (0, 5), (0, 6)),
-        )
-        .add_path("T-2", ((0, 7), (0, 8), (1, 8), (1, 7), (1, 6)))
-        .add_path(
-            "T-3",
-            ((1, 5), (1, 4), (1, 3), (1, 2), (1, 1), (1, 0), (2, 0), (2, 1), (2, 2)),
-        )
-        .add_path(
-            "T-4",
-            ((2, 3), (2, 4), (2, 5), (2, 6), (2, 7), (2, 8), (3, 8), (3, 7), (3, 6)),
-        )
-        .add_path(
-            "T-5",
-            ((3, 5), (3, 4), (3, 3), (3, 2), (3, 1), (3, 0), (4, 0), (4, 1), (4, 2)),
-        )
-        .add_path(
-            "T-6",
-            ((4, 3), (4, 4), (4, 5), (4, 6), (4, 7), (4, 8), (5, 8), (5, 7), (5, 6)),
-        )
-        .add_path(
-            "T-7",
-            ((5, 5), (5, 4), (5, 3), (5, 2), (5, 1), (5, 0), (6, 0), (6, 1), (6, 2)),
-        )
-        .add_path("T-8", ((6, 3), (6, 4), (6, 5), (6, 6), (6, 7), (6, 8)))
-        .build()
-    )
+    for pair in range(6):
+        top = pair * 2
+        bottom = top + 1
+        if pair % 2 == 0:
+            long_path = (
+                *((top, col) for col in range(10)),
+                *((bottom, col) for col in range(9, 4, -1)),
+            )
+            short_path = tuple((bottom, col) for col in range(4, -1, -1))
+        else:
+            long_path = (
+                *((top, col) for col in range(9, -1, -1)),
+                *((bottom, col) for col in range(5)),
+            )
+            short_path = tuple((bottom, col) for col in range(5, 10))
+        builder.add_path(f"T-{pair * 2 + 1}", long_path)
+        builder.add_path(f"T-{pair * 2 + 2}", short_path)
+    return builder.build()
 
 
 def raised_board_cells(rows: int, cols: int) -> frozenset[tuple[int, int]]:
@@ -67,21 +55,24 @@ def raised_board_cells(rows: int, cols: int) -> frozenset[tuple[int, int]]:
 # 新增正式关卡只需要增加一条规格，不再逐格编写路径。
 GENERATED_SPECS: tuple[GeneratedLevelSpec, ...] = (
     GeneratedLevelSpec(
-        "初级回路", 12, 16, seed=20260921,
-        min_arrow_length=2, max_arrow_length=12, boundary_break_chance=0.55,
+        "初级回路", 22, 16, seed=20260921,
+        min_arrow_length=2, max_arrow_length=13, boundary_break_chance=0.55,
+        path_mix_factor=1,
     ),
     GeneratedLevelSpec(
-        "折返迷阵", 14, 18, seed=20260922,
+        "折返迷阵", 26, 18, seed=20260922,
         min_arrow_length=2, max_arrow_length=15, boundary_break_chance=0.4,
+        path_mix_factor=1,
     ),
     GeneratedLevelSpec(
-        "密集交织", 16, 20, seed=20260923,
-        min_arrow_length=3, max_arrow_length=18, boundary_break_chance=0.25,
+        "密集交织", 30, 20, seed=20260923,
+        min_arrow_length=2, max_arrow_length=18, boundary_break_chance=0.25,
+        path_mix_factor=1,
     ),
     GeneratedLevelSpec(
-        "异形挑战", 18, 18, seed=20260924,
-        min_arrow_length=2, max_arrow_length=9, boundary_break_chance=0.2,
-        playable_cells=raised_board_cells(18, 18),
+        "异形挑战", 30, 20, seed=20260924,
+        min_arrow_length=2, max_arrow_length=10, boundary_break_chance=0.2,
+        playable_cells=raised_board_cells(30, 20),
     ),
 )
 
