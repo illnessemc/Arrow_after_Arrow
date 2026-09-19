@@ -51,23 +51,37 @@ def build_tutorial_level() -> Level:
     )
 
 
+def raised_board_cells(rows: int, cols: int) -> frozenset[tuple[int, int]]:
+    """创建“凸”字轮廓：上半部较窄，下半部铺满。"""
+    shoulder_row = rows // 3
+    stem_width = max(6, cols // 2)
+    stem_left = (cols - stem_width) // 2
+    return frozenset(
+        (row, col)
+        for row in range(rows)
+        for col in range(cols)
+        if row >= shoulder_row or stem_left <= col < stem_left + stem_width
+    )
+
+
 # 新增正式关卡只需要增加一条规格，不再逐格编写路径。
 GENERATED_SPECS: tuple[GeneratedLevelSpec, ...] = (
     GeneratedLevelSpec(
-        "初级回路", 8, 10, seed=20260921,
-        min_arrow_length=4, max_arrow_length=10, boundary_break_chance=0.55,
+        "初级回路", 12, 16, seed=20260921,
+        min_arrow_length=2, max_arrow_length=12, boundary_break_chance=0.55,
     ),
     GeneratedLevelSpec(
-        "折返迷阵", 9, 11, seed=20260922,
-        min_arrow_length=5, max_arrow_length=12, boundary_break_chance=0.4,
+        "折返迷阵", 14, 18, seed=20260922,
+        min_arrow_length=2, max_arrow_length=15, boundary_break_chance=0.4,
     ),
     GeneratedLevelSpec(
-        "密集交织", 10, 12, seed=20260923,
-        min_arrow_length=5, max_arrow_length=13, boundary_break_chance=0.25,
+        "密集交织", 16, 20, seed=20260923,
+        min_arrow_length=3, max_arrow_length=18, boundary_break_chance=0.25,
     ),
     GeneratedLevelSpec(
-        "长线挑战", 11, 13, seed=20260924,
-        min_arrow_length=6, max_arrow_length=15, boundary_break_chance=0.15,
+        "异形挑战", 18, 18, seed=20260924,
+        min_arrow_length=2, max_arrow_length=9, boundary_break_chance=0.2,
+        playable_cells=raised_board_cells(18, 18),
     ),
 )
 

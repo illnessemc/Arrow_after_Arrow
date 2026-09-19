@@ -32,6 +32,7 @@ class GeneratedLevelSpec:
     boundary_break_chance: float = 0.3
     path_mix_factor: int = 2
     max_generation_attempts: int = 40
+    playable_cells: frozenset[Cell] | None = None
 
     def __post_init__(self) -> None:
         if self.rows < 4 or self.cols < 4:
@@ -46,6 +47,15 @@ class GeneratedLevelSpec:
             raise ValueError("路径混合强度不能为负数")
         if self.max_generation_attempts <= 0:
             raise ValueError("生成尝试次数必须为正数")
+        if self.playable_cells is not None:
+            # 交给 BoardLayout 复用边界和空布局校验。
+            BoardLayout(self.rows, self.cols, self.playable_cells)
+
+    def create_layout(self) -> BoardLayout:
+        """创建本规格使用的布局；未提供掩码时使用完整矩形。"""
+        if self.playable_cells is None:
+            return BoardLayout.rectangle(self.rows, self.cols)
+        return BoardLayout(self.rows, self.cols, self.playable_cells)
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,30 +88,27 @@ class SerpentineLevelGenerator:
         # 生成并让求解器验收，比在生成器中复制一套规则判断更可靠。
         for attempt in range(1, spec.max_generation_attempts + 1):
             randomizer = random.Random(spec.seed * 1000 + attempt)
-            path = self._board_path(spec.rows, spec.cols, randomizer)
-            path = self._mix_path(
-                path,
-                spec.rows,
-                spec.cols,
-                len(path) * spec.path_mix_factor,
-                randomizer,
-            )
+            layout = spec.create_layout()
+            coverage_paths = self._coverage_paths(layout, spec, randomizer)
             try:
-                parts = self._split_path(
-                    path,
-                    spec.min_arrow_length,
-                    spec.max_arrow_length,
-                    spec.rows,
-                    spec.cols,
-                    spec.boundary_break_chance,
-                    randomizer,
+                parts = tuple(
+                    part
+                    for path in coverage_paths
+                    for part in self._split_path(
+                        path,
+                        min(spec.min_arrow_length, len(path)),
+                        min(spec.max_arrow_length, len(path)),
+                        layout,
+                        spec.boundary_break_chance,
+                        randomizer,
+                    )
                 )
             except ValueError:
                 continue
 
             builder = ManualLevelBuilder(
                 spec.name,
-                BoardLayout.rectangle(spec.rows, spec.cols),
+                layout,
                 role=LevelRole.FORMAL,
                 intro=f"自动关卡 · {spec.rows}×{spec.cols} · 找到折线的释放顺序",
                 mistake_limit=spec.mistake_limit,
@@ -124,6 +131,61 @@ class SerpentineLevelGenerator:
             f"关卡 {spec.name} 在 {spec.max_generation_attempts} 次内未生成可解布局，"
             f"最后剩余箭头：{remaining}"
         )
+
+    def _coverage_paths(
+        self,
+        layout: BoardLayout,
+        spec: GeneratedLevelSpec,
+        randomizer: random.Random,
+    ) -> tuple[tuple[Cell, ...], ...]:
+        """为布局生成一组互不重叠、完整覆盖的连续路径。"""
+        if len(layout.playable_cells) == layout.rows * layout.cols:
+            path = self._board_path(layout.rows, layout.cols, randomizer)
+            return (
+                self._mix_path(
+                    path,
+                    layout.rows,
+                    layout.cols,
+                    len(path) * spec.path_mix_factor,
+                    randomizer,
+                ),
+            )
+        return self._row_run_paths(layout, randomizer)
+
+    @staticmethod
+    def _row_run_paths(
+        layout: BoardLayout,
+        randomizer: random.Random,
+    ) -> tuple[tuple[Cell, ...], ...]:
+        """把异形棋盘拆成连续行区段，作为可靠的全覆盖降级策略。
+
+        这种策略不假设棋盘必须是矩形，因此凸字形、缺角和带空洞布局都能
+        生成。每个区段至少需要两个格子，以维持当前多格箭头约束。
+        """
+        paths: list[tuple[Cell, ...]] = []
+        for row in range(layout.rows):
+            columns = sorted(col for cell_row, col in layout.playable_cells if cell_row == row)
+            if not columns:
+                continue
+
+            run: list[int] = [columns[0]]
+            for col in columns[1:]:
+                if col == run[-1] + 1:
+                    run.append(col)
+                    continue
+                if len(run) < 2:
+                    raise ValueError("异形棋盘包含无法组成多格箭头的孤立格")
+                if randomizer.choice((True, False)):
+                    run.reverse()
+                paths.append(tuple((row, item) for item in run))
+                run = [col]
+
+            if len(run) < 2:
+                raise ValueError("异形棋盘包含无法组成多格箭头的孤立格")
+            if randomizer.choice((True, False)):
+                run.reverse()
+            paths.append(tuple((row, item) for item in run))
+        return tuple(paths)
 
     @staticmethod
     def _board_path(
@@ -204,8 +266,7 @@ class SerpentineLevelGenerator:
         path: tuple[Cell, ...],
         minimum: int,
         maximum: int,
-        rows: int,
-        cols: int,
+        layout: BoardLayout,
         boundary_break_chance: float,
         randomizer: random.Random,
     ) -> tuple[tuple[Cell, ...], ...]:
@@ -225,7 +286,7 @@ class SerpentineLevelGenerator:
             previous, current = path[end - 1], path[end]
             step = (current[0] - previous[0], current[1] - previous[1])
             next_cell = (current[0] + step[0], current[1] + step[1])
-            return not (0 <= next_cell[0] < rows and 0 <= next_cell[1] < cols)
+            return not layout.contains(next_cell)
 
         # 在部分边界转角主动断开依赖链，产生多个同时可飞出的候选箭头。
         boundary_cuts = {
