@@ -78,19 +78,6 @@ class Button:
         surface.blit(label, label.get_rect(center=self.rect.center))
 
 
-@dataclass(slots=True)
-class TrailPulse:
-    """箭头飞过网格点时短暂放大的光点。"""
-
-    cell: tuple[int, int]
-    elapsed: float = 0.0
-    duration: float = 0.52
-
-    @property
-    def done(self) -> bool:
-        return self.elapsed >= self.duration
-
-
 class ArrowGameApp:
     def __init__(self, assets: AssetProvider | None = None) -> None:
         pygame.init()
@@ -108,7 +95,6 @@ class ArrowGameApp:
         self.level_index = 0
         self.model = GameSession(LEVELS[0])
         self.animations = AnimationQueue()
-        self.trail_pulses: list[TrailPulse] = []
         self.pending_state: ScreenState | None = None
         self.board_rect = pygame.Rect(0, 0, 0, 0)
         self.cell_size = 0
@@ -142,7 +128,6 @@ class ArrowGameApp:
             return
         self._closed = True
         self.animations.clear()
-        self.trail_pulses.clear()
         self.arrow_colors.clear()
         self.buttons.clear()
         self.assets.clear()
@@ -158,7 +143,6 @@ class ArrowGameApp:
             seed=20260920 + index,
         )
         self.animations.clear()
-        self.trail_pulses.clear()
         self.pending_state = None
         self.state = ScreenState.PLAYING
 
@@ -198,7 +182,6 @@ class ArrowGameApp:
                     arrow,
                     duration=duration,
                     movement_cells=movement_cells,
-                    trail_cells=(*arrow.cells, *edge_cells),
                 )
             )
             if self.model.is_cleared:
@@ -229,30 +212,11 @@ class ArrowGameApp:
         elif action == "home":
             self.state = ScreenState.START
             self.animations.clear()
-            self.trail_pulses.clear()
             self.pending_state = None
         elif action == "quit":
             self.running = False
 
     def _update(self, dt: float) -> None:
-        for pulse in self.trail_pulses:
-            pulse.elapsed += dt
-        self.trail_pulses = [pulse for pulse in self.trail_pulses if not pulse.done]
-
-        active = self.animations.active
-        if active is not None and active.kind is AnimationKind.FLY:
-            projected_progress = min((active.elapsed + dt) / active.duration, 1.0)
-            passed_steps = int(
-                self._ease(projected_progress) * active.movement_cells
-            )
-            while active.emitted_steps < min(passed_steps, len(active.trail_cells)):
-                cell = active.trail_cells[active.emitted_steps]
-                self.trail_pulses.append(TrailPulse(cell))
-                active.emitted_steps += 1
-            # 大棋盘连续操作时也限制瞬时特效数量，已结束的光点会优先丢弃。
-            if len(self.trail_pulses) > 512:
-                self.trail_pulses = self.trail_pulses[-512:]
-
         self.animations.update(dt)
         if not self.animations and self.pending_state is not None:
             self.state = self.pending_state
@@ -338,17 +302,6 @@ class ArrowGameApp:
         self.buttons.append(restart)
 
         pygame.draw.line(self.screen, GRID, (0, 112), (WINDOW_SIZE[0], 112), width=2)
-        for row in range(level.rows):
-            for col in range(level.cols):
-                if not level.layout.contains((row, col)):
-                    continue
-                pygame.draw.circle(
-                    self.screen,
-                    GRID,
-                    self._cell_center((row, col)),
-                    max(2, int(self.cell_size * 0.035)),
-                )
-
         active = self.animations.active
         animated_id = active.arrow.arrow_id if active else None
         for arrow in self.model.board.arrows:
@@ -364,7 +317,6 @@ class ArrowGameApp:
                     self.arrow_colors[animation.arrow.arrow_id],
                 )
 
-        self._draw_trail_pulses()
         if active is not None:
             self._draw_animation(active)
 
@@ -420,6 +372,7 @@ class ArrowGameApp:
         color: tuple[int, int, int],
         offset: pygame.Vector2 | None = None,
         points: Sequence[pygame.Vector2] | None = None,
+        points_are_smoothed: bool = False,
     ) -> None:
         """绘制整支箭头的折线路径和头部。
 
@@ -433,10 +386,15 @@ class ArrowGameApp:
         )
         if offset is not None:
             body_points = [point + offset for point in body_points]
+        render_points = (
+            body_points
+            if points_are_smoothed
+            else self._rounded_polyline(body_points)
+        )
 
         direction = pygame.Vector2(arrow.direction.col_step, arrow.direction.row_step)
         perpendicular = pygame.Vector2(-direction.y, direction.x)
-        head = body_points[-1]
+        head = render_points[-1]
         neck = head + direction * self.cell_size * 0.04
         tip = head + direction * self.cell_size * 0.36
         wing = self.cell_size * 0.15
@@ -446,9 +404,8 @@ class ArrowGameApp:
             tail = head - direction * self.cell_size * 0.28
             shaft_points = [tail, neck]
         else:
-            tail = body_points[0]
-            # 连续直线上的格点不需要逐个绘制端帽，否则会呈现珠串状凸点。
-            shaft_points = [*self._simplify_polyline(body_points), neck]
+            tail = render_points[0]
+            shaft_points = [*render_points, neck]
 
         # 每段分别绘制并在连接点补圆，形成连续、圆润的折线身体。
         for start, end in zip(shaft_points, shaft_points[1:]):
@@ -476,6 +433,44 @@ class ArrowGameApp:
         simplified.append(points[-1].copy())
         return simplified
 
+    def _rounded_polyline(
+        self,
+        points: Sequence[pygame.Vector2],
+    ) -> list[pygame.Vector2]:
+        """把正交折线的直角替换为采样后的二次圆滑曲线。"""
+        nodes = self._simplify_polyline(points)
+        if len(nodes) <= 2:
+            return nodes
+
+        result = [nodes[0].copy()]
+        preferred_radius = self.cell_size * 0.3
+        for previous, corner, following in zip(nodes, nodes[1:], nodes[2:]):
+            incoming = corner - previous
+            outgoing = following - corner
+            radius = min(
+                preferred_radius,
+                incoming.length() * 0.45,
+                outgoing.length() * 0.45,
+            )
+            if radius <= 0:
+                result.append(corner.copy())
+                continue
+
+            entry = corner - incoming.normalize() * radius
+            exit_point = corner + outgoing.normalize() * radius
+            result.append(entry)
+            # 二次 Bézier 曲线提供稳定圆角；采样数固定，避免随帧产生抖动。
+            for step in range(1, 7):
+                t = step / 6
+                curve = (
+                    entry * (1 - t) ** 2
+                    + corner * 2 * (1 - t) * t
+                    + exit_point * t**2
+                )
+                result.append(curve)
+        result.append(nodes[-1].copy())
+        return result
+
     def _moved_path_points(
         self,
         arrow: Arrow,
@@ -487,24 +482,67 @@ class ArrowGameApp:
         窗口沿轨迹滑动。头部先前进，身体逐段跟随，转角会自然被拉直。
         """
         direction = (arrow.direction.row_step, arrow.direction.col_step)
-        trajectory = list(arrow.cells)
-        cursor = trajectory[-1]
+        trajectory_cells = list(arrow.cells)
+        cursor = trajectory_cells[-1]
 
         required_steps = math.ceil(movement) + 1
         for _ in range(required_steps):
             cursor = (cursor[0] + direction[0], cursor[1] + direction[1])
-            trajectory.append(cursor)
+            trajectory_cells.append(cursor)
 
-        step = int(movement)
-        fraction = movement - step
+        body_curve = self._rounded_polyline(
+            [self._cell_center(cell) for cell in arrow.cells]
+        )
+        trajectory_curve = self._rounded_polyline(
+            [self._cell_center(cell) for cell in trajectory_cells]
+        )
+        body_length = self._polyline_length(body_curve)
+        start_distance = movement * self.cell_size
+        return self._slice_polyline(
+            trajectory_curve,
+            start_distance,
+            start_distance + body_length,
+        )
 
-        result: list[pygame.Vector2] = []
-        for index in range(len(arrow.cells)):
-            current = self._cell_center(trajectory[step + index])
-            if fraction > 0:
-                following = self._cell_center(trajectory[step + index + 1])
-                current = current.lerp(following, fraction)
-            result.append(current)
+    @staticmethod
+    def _polyline_length(points: Sequence[pygame.Vector2]) -> float:
+        return sum(start.distance_to(end) for start, end in zip(points, points[1:]))
+
+    @staticmethod
+    def _slice_polyline(
+        points: Sequence[pygame.Vector2],
+        start_distance: float,
+        end_distance: float,
+    ) -> list[pygame.Vector2]:
+        """按弧长截取连续曲线，用于让整支箭头沿圆角轨迹滑动。"""
+        if len(points) < 2:
+            return [point.copy() for point in points]
+
+        lengths = [
+            start.distance_to(end) for start, end in zip(points, points[1:])
+        ]
+        total = sum(lengths)
+        start_distance = max(0.0, min(start_distance, total))
+        end_distance = max(start_distance, min(end_distance, total))
+
+        def point_at(distance: float) -> pygame.Vector2:
+            walked = 0.0
+            for index, length in enumerate(lengths):
+                if walked + length >= distance and length > 0:
+                    ratio = (distance - walked) / length
+                    return points[index].lerp(points[index + 1], ratio)
+                walked += length
+            return points[-1].copy()
+
+        result = [point_at(start_distance)]
+        walked = 0.0
+        for index, length in enumerate(lengths):
+            walked += length
+            if start_distance < walked < end_distance:
+                result.append(points[index + 1].copy())
+        end_point = point_at(end_distance)
+        if not result[-1].distance_to(end_point) < 0.01:
+            result.append(end_point)
         return result
 
     def _draw_animation(self, animation: ArrowAnimation) -> None:
@@ -523,7 +561,12 @@ class ArrowGameApp:
                 if progress < 0.18
                 else self.arrow_colors[animation.arrow.arrow_id]
             )
-            self._draw_arrow(animation.arrow, color, points=moving_points)
+            self._draw_arrow(
+                animation.arrow,
+                color,
+                points=moving_points,
+                points_are_smoothed=True,
+            )
             return
         else:
             probe = math.sin(progress * math.pi) * animation.movement_cells
@@ -531,7 +574,12 @@ class ArrowGameApp:
             shake = math.sin(progress * math.pi * 7) * self.cell_size * 0.025
             perpendicular = pygame.Vector2(-direction.y, direction.x)
             moving_points = [point + perpendicular * shake for point in moving_points]
-            self._draw_arrow(animation.arrow, DANGER, points=moving_points)
+            self._draw_arrow(
+                animation.arrow,
+                DANGER,
+                points=moving_points,
+                points_are_smoothed=True,
+            )
 
     def _blocked_probe_distance(self, arrow: Arrow) -> float:
         """在点击瞬间记录碰撞前可前进的距离，避免排队期间状态变化。"""
@@ -547,21 +595,6 @@ class ArrowGameApp:
     def _ease(progress: float) -> float:
         """五次平滑插值，让箭头像滑动一样柔和启动和停止。"""
         return progress**3 * (progress * (progress * 6.0 - 15.0) + 10.0)
-
-    def _draw_trail_pulses(self) -> None:
-        for pulse in self.trail_pulses:
-            progress = min(pulse.elapsed / pulse.duration, 1.0)
-            strength = math.sin(progress * math.pi)
-            radius = int(self.cell_size * 0.17 * strength)
-            if radius <= 0:
-                continue
-            # 只使用背景色，效果是网格点被轻轻吞没后恢复，不抢箭头本身。
-            pygame.draw.circle(
-                self.screen,
-                BACKGROUND,
-                self._cell_center(pulse.cell),
-                radius,
-            )
 
     def _draw_text(
         self,

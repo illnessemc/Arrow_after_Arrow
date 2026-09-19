@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from enum import Enum, auto
 from typing import Iterator
 
-from arrow_game.core import Arrow, Cell
+from arrow_game.core import Arrow
 
 
 class AnimationKind(Enum):
@@ -27,9 +27,7 @@ class ArrowAnimation:
     arrow: Arrow
     duration: float
     movement_cells: float
-    trail_cells: tuple[Cell, ...] = ()
     elapsed: float = 0.0
-    emitted_steps: int = 0
 
     @property
     def progress(self) -> float:
