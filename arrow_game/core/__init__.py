@@ -4,7 +4,22 @@ from .arrow import Arrow
 from .board import GameBoard
 from .direction import Cell, Direction
 from .game import ClickResult, GameSession
-from .level import Level
+from .layout import BoardLayout
+from .level import CoverageMode, Level, LevelRole
+from .rules import ExitRule, StraightExitRule
 
-__all__ = ["Arrow", "Cell", "ClickResult", "Direction", "GameBoard", "GameSession", "Level"]
+__all__ = [
+    "Arrow",
+    "BoardLayout",
+    "Cell",
+    "ClickResult",
+    "CoverageMode",
+    "Direction",
+    "ExitRule",
+    "GameBoard",
+    "GameSession",
+    "Level",
+    "LevelRole",
+    "StraightExitRule",
+]
 

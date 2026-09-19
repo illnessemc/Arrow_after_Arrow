@@ -9,6 +9,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 from enum import Enum, auto
+from typing import Sequence
 
 import pygame
 
@@ -116,8 +117,8 @@ class ArrowGameApp:
         self.model = GameSession(LEVELS[index])
         self.animation = None
         self.pending_state = None
-        self.toast = "找出前方没有阻挡的箭头"
-        self.toast_timer = 2.2
+        self.toast = self.model.level.intro
+        self.toast_timer = 3.2
         self.state = ScreenState.PLAYING
 
     def _handle_events(self) -> None:
@@ -144,7 +145,10 @@ class ArrowGameApp:
         # UI 只把点击的网格交给规则层，不在这里重复编写路径判断。
         result, _ = self.model.click_cell(arrow.head)
         if result == ClickResult.REMOVED:
-            self.animation = Animation("fly", arrow)
+            # 箭头越长、距离边界越远，完整抽出需要的动画时间也略长。
+            travel_cells = len(tuple(self.model.board.cells_to_edge(arrow.head, arrow.direction)))
+            duration = min(1.5, 0.35 + (travel_cells + len(arrow.cells)) * 0.08)
+            self.animation = Animation("fly", arrow, duration=duration)
             self.toast = "漂亮！箭头成功飞出"
             self.toast_timer = 1.2
             if self.model.is_cleared:
@@ -243,7 +247,7 @@ class ArrowGameApp:
         level = self.model.level
 
         self._draw_text(
-            f"第 {self.level_index + 1} 关  ·  {level.name}",
+            f"第 {self.level_index + 1} 关  ·  {level.role.label}  ·  {level.name}",
             self.font_subtitle,
             INK,
             (250, 55),
@@ -273,6 +277,9 @@ class ArrowGameApp:
                     self.cell_size,
                     self.cell_size,
                 )
+                if not level.layout.contains((row, col)):
+                    pygame.draw.rect(self.screen, BACKGROUND, rect)
+                    continue
                 if (row + col) % 2 == 0:
                     pygame.draw.rect(self.screen, (249, 251, 255), rect)
                 pygame.draw.rect(self.screen, GRID, rect, width=1)
@@ -286,7 +293,8 @@ class ArrowGameApp:
             self._draw_animation(self.animation)
 
         if self.toast_timer > 0 and self.toast:
-            toast_rect = pygame.Rect(235, 688, 450, 45)
+            # 关卡介绍比普通反馈更长，使用接近棋盘宽度的提示框防止文字溢出。
+            toast_rect = pygame.Rect(80, 688, 760, 45)
             pygame.draw.rect(self.screen, INK, toast_rect, border_radius=14)
             self._draw_text(self.toast, self.font_small, (255, 255, 255), toast_rect.center)
 
@@ -332,23 +340,73 @@ class ArrowGameApp:
         arrow: Arrow,
         color: tuple[int, int, int],
         offset: pygame.Vector2 | None = None,
+        points: Sequence[pygame.Vector2] | None = None,
     ) -> None:
-        center = self._cell_center(arrow.head)
+        """绘制整支箭头的折线路径和头部。
+
+        ``points`` 用于飞出动画传入已经移动过的身体节点；普通绘制则直接
+        使用 Arrow.cells。所有转角都用圆形连接，避免粗线拐弯时出现缝隙。
+        """
+        body_points = (
+            [point.copy() for point in points]
+            if points is not None
+            else [self._cell_center(cell) for cell in arrow.cells]
+        )
         if offset is not None:
-            center += offset
+            body_points = [point + offset for point in body_points]
+
         direction = pygame.Vector2(arrow.direction.col_step, arrow.direction.row_step)
         perpendicular = pygame.Vector2(-direction.y, direction.x)
-        length = self.cell_size * 0.52
-        tail = center - direction * length * 0.42
-        neck = center + direction * length * 0.08
-        tip = center + direction * length * 0.48
-        wing = length * 0.26
-        width = max(5, int(self.cell_size * 0.075))
+        head = body_points[-1]
+        neck = head + direction * self.cell_size * 0.04
+        tip = head + direction * self.cell_size * 0.36
+        wing = self.cell_size * 0.18
+        width = max(7, int(self.cell_size * 0.13))
 
-        pygame.draw.line(self.screen, color, tail, neck, width=width)
+        if len(body_points) == 1:
+            tail = head - direction * self.cell_size * 0.28
+            shaft_points = [tail, neck]
+        else:
+            tail = body_points[0]
+            shaft_points = [*body_points, neck]
+
+        pygame.draw.lines(self.screen, color, False, shaft_points, width=width)
+        for joint in shaft_points[:-1]:
+            pygame.draw.circle(self.screen, color, joint, width // 2)
         points = [tip, neck + perpendicular * wing, neck - perpendicular * wing]
         pygame.draw.polygon(self.screen, color, points)
         pygame.draw.circle(self.screen, color, tail, width // 2)
+
+    def _flight_points(self, arrow: Arrow, progress: float) -> list[pygame.Vector2]:
+        """计算折线箭头逐格向头部方向抽出时的身体位置。
+
+        将原路径、头部到边界的路径和棋盘外延长线拼成一条轨迹，再让一个
+        与箭头等长的窗口沿轨迹滑动。这样头部先前进，后续身体逐段跟随，
+        转角会自然被拉直，而不是把整条折线僵硬地平移出去。
+        """
+        direction = (arrow.direction.row_step, arrow.direction.col_step)
+        exit_cells = list(self.model.board.cells_to_edge(arrow.head, arrow.direction))
+        trajectory = list(arrow.cells) + exit_cells
+        cursor = trajectory[-1]
+
+        # 多补一个格子供最后一帧插值，最终整支箭头都会处在棋盘外。
+        for _ in range(len(arrow.cells) + 1):
+            cursor = (cursor[0] + direction[0], cursor[1] + direction[1])
+            trajectory.append(cursor)
+
+        total_shifts = len(exit_cells) + len(arrow.cells)
+        movement = progress * total_shifts
+        step = min(int(movement), total_shifts)
+        fraction = movement - step
+
+        result: list[pygame.Vector2] = []
+        for index in range(len(arrow.cells)):
+            current = self._cell_center(trajectory[step + index])
+            if fraction > 0 and step < total_shifts:
+                following = self._cell_center(trajectory[step + index + 1])
+                current = current.lerp(following, fraction)
+            result.append(current)
+        return result
 
     def _draw_animation(self, animation: Animation) -> None:
         progress = min(animation.elapsed / animation.duration, 1.0)
@@ -357,18 +415,10 @@ class ArrowGameApp:
         direction = pygame.Vector2(d_col, d_row)
 
         if animation.kind == "fly":
-            eased = 1 - (1 - progress) ** 3
-            center = self._cell_center(animation.arrow.head)
-            if d_col > 0:
-                distance = self.board_rect.right - center.x + self.cell_size
-            elif d_col < 0:
-                distance = center.x - self.board_rect.left + self.cell_size
-            elif d_row > 0:
-                distance = self.board_rect.bottom - center.y + self.cell_size
-            else:
-                distance = center.y - self.board_rect.top + self.cell_size
-            offset = direction * distance * eased
-            color = SUCCESS if progress < 0.35 else PRIMARY
+            moving_points = self._flight_points(animation.arrow, progress)
+            color = SUCCESS if progress < 0.22 else PRIMARY
+            self._draw_arrow(animation.arrow, color, points=moving_points)
+            return
         else:
             bump = math.sin(progress * math.pi) * self.cell_size * 0.13
             shake = math.sin(progress * math.pi * 7) * self.cell_size * 0.035

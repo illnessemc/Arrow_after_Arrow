@@ -6,6 +6,7 @@ from .arrow import Arrow
 from .board import GameBoard
 from .direction import Cell
 from .level import Level
+from .rules import ExitRule, StraightExitRule
 
 
 class ClickResult(Enum):
@@ -20,8 +21,9 @@ class ClickResult(Enum):
 class GameSession:
     """协调关卡模板和可变地图，但不包含界面代码。"""
 
-    def __init__(self, level: Level) -> None:
+    def __init__(self, level: Level, rule: ExitRule | None = None) -> None:
         self.level = level
+        self.rule = rule or StraightExitRule()
         self.board: GameBoard
         self.mistakes_left: int
         self.restart()
@@ -48,7 +50,7 @@ class GameSession:
         return self.is_cleared or self.is_failed
 
     def blocker_of(self, arrow: Arrow) -> Arrow | None:
-        return self.board.first_blocker(arrow)
+        return self.rule.first_blocker(self.board, arrow)
 
     def can_exit(self, arrow: Arrow) -> bool:
         """只有仍在地图中且头部前方无阻挡的箭头可以飞出。"""

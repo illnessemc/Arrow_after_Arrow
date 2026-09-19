@@ -8,18 +8,24 @@ from collections.abc import Iterator
 
 from .arrow import Arrow
 from .direction import Cell, Direction
+from .layout import BoardLayout
 
 
 class GameBoard:
     """保存一局游戏中会发生变化的地图状态。"""
 
-    def __init__(self, rows: int, cols: int) -> None:
-        if rows <= 0 or cols <= 0:
-            raise ValueError("棋盘行数和列数必须为正数")
-        self.rows = rows
-        self.cols = cols
+    def __init__(self, layout: BoardLayout) -> None:
+        self.layout = layout
         self._arrows: dict[str, Arrow] = {}
         self._cell_owners: dict[Cell, str] = {}
+
+    @property
+    def rows(self) -> int:
+        return self.layout.rows
+
+    @property
+    def cols(self) -> int:
+        return self.layout.cols
 
     @property
     def arrows(self) -> tuple[Arrow, ...]:
@@ -35,8 +41,16 @@ class GameBoard:
         return not self._arrows
 
     def is_inside(self, cell: Cell) -> bool:
-        row, col = cell
-        return 0 <= row < self.rows and 0 <= col < self.cols
+        return self.layout.contains(cell)
+
+    @property
+    def occupied_cells(self) -> frozenset[Cell]:
+        return frozenset(self._cell_owners)
+
+    @property
+    def empty_cells(self) -> frozenset[Cell]:
+        """返回尚未被箭头占据的可玩格，供关卡完整性检查使用。"""
+        return self.layout.playable_cells - self.occupied_cells
 
     def add_arrow(self, arrow: Arrow) -> None:
         """放入整支箭头，并为它的每个身体格建立占用索引。"""

@@ -39,6 +39,14 @@ class Arrow:
             if row_distance + col_distance != 1:
                 raise ValueError(f"箭头 {self.arrow_id} 的路径不连续：{previous} -> {current}")
 
+        if len(self.cells) > 1:
+            previous, head = self.cells[-2:]
+            final_step = (head[0] - previous[0], head[1] - previous[1])
+            if final_step != self.direction.value:
+                raise ValueError(
+                    f"箭头 {self.arrow_id} 的朝向必须与路径最后一段一致"
+                )
+
     @classmethod
     def single(
         cls, arrow_id: str, row: int, col: int, direction: Direction
