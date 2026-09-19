@@ -15,20 +15,26 @@ import pygame
 
 from .core import Arrow, ClickResult, GameSession
 from .data import LEVELS
+from .ui import (
+    DARK_THEME,
+    AssetProvider,
+    EmptyAssetProvider,
+    assign_arrow_colors,
+)
 
-WINDOW_SIZE = (920, 760)
+WINDOW_SIZE = (800, 1000)
 FPS = 60
 
-BACKGROUND = (247, 244, 237)
-PANEL = (253, 251, 246)
-INK = (35, 39, 42)
-MUTED = (111, 108, 101)
-GRID = (207, 202, 191)
-PRIMARY = (66, 92, 78)
-PRIMARY_DARK = (47, 72, 59)
-ARROW_COLOR = (40, 43, 45)
-SUCCESS = (28, 174, 119)
-DANGER = (232, 73, 91)
+BACKGROUND = DARK_THEME.background
+PANEL = DARK_THEME.panel
+PANEL_LIGHT = DARK_THEME.panel_light
+INK = DARK_THEME.ink
+MUTED = DARK_THEME.muted
+GRID = DARK_THEME.grid
+PRIMARY = DARK_THEME.accent
+PRIMARY_DARK = (39, 174, 163)
+SUCCESS = DARK_THEME.success
+DANGER = DARK_THEME.danger
 
 
 class ScreenState(Enum):
@@ -50,9 +56,9 @@ class Button:
         hovered = self.rect.collidepoint(pygame.mouse.get_pos())
         if self.primary:
             color = PRIMARY_DARK if hovered else PRIMARY
-            text_color = (255, 255, 255)
+            text_color = INK
         else:
-            color = (226, 234, 245) if hovered else (237, 242, 249)
+            color = PANEL_LIGHT if hovered else PANEL
             text_color = INK
         pygame.draw.rect(surface, color, self.rect, border_radius=14)
         label = font.render(self.text, True, text_color)
@@ -72,7 +78,7 @@ class Animation:
 
 
 class ArrowGameApp:
-    def __init__(self) -> None:
+    def __init__(self, assets: AssetProvider | None = None) -> None:
         pygame.init()
         pygame.display.set_caption("一箭又一箭")
         self.screen = pygame.display.set_mode(WINDOW_SIZE)
@@ -80,8 +86,9 @@ class ArrowGameApp:
         self.font_small = self._font(22)
         self.font_body = self._font(28)
         self.font_button = self._font(26, bold=True)
-        self.font_title = self._font(64, bold=True)
+        self.font_title = self._font(58, bold=True)
         self.font_subtitle = self._font(32, bold=True)
+        self.assets = assets or EmptyAssetProvider()
 
         self.state = ScreenState.START
         self.level_index = 0
@@ -93,6 +100,7 @@ class ArrowGameApp:
         self.board_rect = pygame.Rect(0, 0, 0, 0)
         self.cell_size = 0
         self.buttons: list[Button] = []
+        self.arrow_colors: dict[str, tuple[int, int, int]] = {}
         self.running = True
 
     @staticmethod
@@ -104,21 +112,30 @@ class ArrowGameApp:
         )
 
     def run(self) -> None:
-        while self.running:
-            dt = self.clock.tick(FPS) / 1000.0
-            self._handle_events()
-            self._update(dt)
-            self._draw()
-            pygame.display.flip()
-        pygame.quit()
+        try:
+            while self.running:
+                dt = self.clock.tick(FPS) / 1000.0
+                self._handle_events()
+                self._update(dt)
+                self._draw()
+                pygame.display.flip()
+        finally:
+            # 显式清空将来可能由图片资源实现维护的缓存，再释放 Pygame。
+            self.assets.clear()
+            pygame.quit()
 
     def _start_level(self, index: int) -> None:
         self.level_index = index
         self.model = GameSession(LEVELS[index])
+        self.arrow_colors = assign_arrow_colors(
+            self.model.level,
+            DARK_THEME.arrow_palette,
+            seed=20260920 + index,
+        )
         self.animation = None
         self.pending_state = None
-        self.toast = self.model.level.intro
-        self.toast_timer = 3.2
+        self.toast = ""
+        self.toast_timer = 0.0
         self.state = ScreenState.PLAYING
 
     def _handle_events(self) -> None:
@@ -191,14 +208,14 @@ class ArrowGameApp:
 
     def _layout_board(self) -> None:
         level = self.model.level
-        available_width = WINDOW_SIZE[0] - 150
-        available_height = WINDOW_SIZE[1] - 245
+        available_width = WINDOW_SIZE[0] - 92
+        available_height = 745
         self.cell_size = int(min(available_width / level.cols, available_height / level.rows))
         width = self.cell_size * level.cols
         height = self.cell_size * level.rows
         self.board_rect = pygame.Rect(
             (WINDOW_SIZE[0] - width) // 2,
-            155 + (available_height - height) // 2,
+            135 + (available_height - height) // 2,
             width,
             height,
         )
@@ -211,7 +228,12 @@ class ArrowGameApp:
         return self.model.board.arrow_at((row, col))
 
     def _draw(self) -> None:
-        self.screen.fill(BACKGROUND)
+        background_key = "start_background" if self.state == ScreenState.START else "game_background"
+        background = self.assets.image(background_key)
+        if background is None:
+            self.screen.fill(BACKGROUND)
+        else:
+            self.screen.blit(pygame.transform.smoothscale(background, WINDOW_SIZE), (0, 0))
         self.buttons = []
         if self.state == ScreenState.START:
             self._draw_start()
@@ -221,61 +243,46 @@ class ArrowGameApp:
             self._draw_result()
 
     def _draw_start(self) -> None:
-        pygame.draw.circle(self.screen, (229, 225, 214), (120, 100), 150)
-        pygame.draw.circle(self.screen, (224, 234, 226), (825, 680), 180)
-        self._draw_text("一箭又一箭", self.font_title, INK, (460, 190))
-        self._draw_text("点击折线 · 看清箭头 · 逐步解锁", self.font_body, MUTED, (460, 265))
+        pygame.draw.circle(self.screen, PANEL_LIGHT, (75, 90), 125)
+        pygame.draw.circle(self.screen, PANEL, (745, 905), 155)
+        title_image = self.assets.image("start_title")
+        if title_image is None:
+            self._draw_text("一箭又一箭", self.font_title, INK, (400, 225))
+        else:
+            self.screen.blit(title_image, title_image.get_rect(center=(400, 225)))
+        self._draw_text("观察路径，依次送走每一支箭", self.font_body, MUTED, (400, 300))
 
-        card = pygame.Rect(185, 320, 550, 155)
+        card = pygame.Rect(110, 375, 580, 185)
         pygame.draw.rect(self.screen, PANEL, card, border_radius=22)
-        pygame.draw.rect(self.screen, GRID, card, width=2, border_radius=22)
+        pygame.draw.rect(self.screen, PANEL_LIGHT, card, width=2, border_radius=22)
         instructions = (
             "前方没有箭头：飞出棋盘",
             "前方存在箭头：碰撞并消耗机会",
             "清空所有箭头即可过关",
         )
         for index, line in enumerate(instructions):
-            self._draw_text(line, self.font_small, INK, (460, 352 + index * 45))
+            self._draw_text(line, self.font_small, INK, (400, 415 + index * 52))
 
-        button = Button(pygame.Rect(335, 535, 250, 62), "开始游戏", "start")
+        button = Button(pygame.Rect(275, 640, 250, 68), "开始游戏", "start")
         button.draw(self.screen, self.font_button)
         self.buttons.append(button)
-        self._draw_text("ESC 退出游戏", self.font_small, MUTED, (460, 650))
+        self._draw_text("ESC 退出游戏", self.font_small, MUTED, (400, 790))
 
     def _draw_game(self) -> None:
         self._layout_board()
         level = self.model.level
 
+        self._draw_text(f"第 {self.level_index + 1} 关", self.font_subtitle, INK, (400, 42))
         self._draw_text(
-            f"第 {self.level_index + 1} 关  ·  {level.role.label}  ·  {level.name}",
-            self.font_subtitle,
-            INK,
-            (250, 55),
+            f"剩余 {self.model.remaining_arrows}", self.font_small, MUTED, (675, 44)
         )
-        self._draw_text(
-            f"剩余箭头  {self.model.remaining_arrows}", self.font_small, MUTED, (560, 48)
-        )
-        self._draw_text(
-            f"失误机会  {self.model.mistakes_left}",
-            self.font_small,
-            DANGER if self.model.mistakes_left == 1 else MUTED,
-            (560, 82),
-        )
+        self._draw_lives((400, 84), self.model.mistakes_left, level.mistake_limit)
 
-        restart = Button(pygame.Rect(740, 34, 135, 52), "重新开始", "restart", False)
+        restart = Button(pygame.Rect(24, 27, 112, 48), "重新开始", "restart", False)
         restart.draw(self.screen, self.font_small)
         self.buttons.append(restart)
 
-        shadow = self.board_rect.inflate(24, 24).move(0, 6)
-        pygame.draw.rect(self.screen, (218, 213, 203), shadow, border_radius=24)
-        pygame.draw.rect(self.screen, PANEL, self.board_rect.inflate(18, 18), border_radius=24)
-        pygame.draw.rect(
-            self.screen,
-            (225, 220, 210),
-            self.board_rect.inflate(18, 18),
-            width=1,
-            border_radius=24,
-        )
+        pygame.draw.line(self.screen, GRID, (0, 112), (WINDOW_SIZE[0], 112), width=2)
         for row in range(level.rows):
             for col in range(level.cols):
                 if not level.layout.contains((row, col)):
@@ -290,16 +297,15 @@ class ArrowGameApp:
         animated_id = self.animation.arrow.arrow_id if self.animation else None
         for arrow in self.model.board.arrows:
             if arrow.arrow_id != animated_id:
-                self._draw_arrow(arrow, ARROW_COLOR)
+                self._draw_arrow(arrow, self.arrow_colors[arrow.arrow_id])
 
         if self.animation is not None:
             self._draw_animation(self.animation)
 
-        if self.toast_timer > 0 and self.toast:
-            # 关卡介绍比普通反馈更长，使用接近棋盘宽度的提示框防止文字溢出。
-            toast_rect = pygame.Rect(80, 688, 760, 45)
-            pygame.draw.rect(self.screen, INK, toast_rect, border_radius=14)
-            self._draw_text(self.toast, self.font_small, (255, 255, 255), toast_rect.center)
+        pygame.draw.line(self.screen, GRID, (0, 902), (WINDOW_SIZE[0], 902), width=2)
+        self._draw_text("提示", self.font_small, INK, (90, 950))
+        self._draw_text("缩放  −   ●   +", self.font_small, MUTED, (400, 950))
+        self._draw_text("辅助线", self.font_small, INK, (710, 950))
 
     def _draw_result(self) -> None:
         is_failure = self.state == ScreenState.FAILED
@@ -313,21 +319,21 @@ class ArrowGameApp:
             else ("全部关卡已完成，你已经掌握核心玩法" if is_final else "所有箭头都飞出了棋盘")
         )
 
-        pygame.draw.circle(self.screen, (*accent[:3],), (460, 205), 72)
-        self._draw_text(icon, self.font_title, (255, 255, 255), (460, 195))
-        self._draw_text(heading, self.font_title, INK, (460, 330))
-        self._draw_text(detail, self.font_body, MUTED, (460, 400))
+        pygame.draw.circle(self.screen, accent, (400, 245), 72)
+        self._draw_text(icon, self.font_title, INK, (400, 235))
+        self._draw_text(heading, self.font_title, INK, (400, 380))
+        self._draw_text(detail, self.font_body, MUTED, (400, 450))
 
         if is_failure:
-            primary = Button(pygame.Rect(335, 485, 250, 62), "重试本关", "restart")
+            primary = Button(pygame.Rect(275, 550, 250, 62), "重试本关", "restart")
         elif is_final:
-            primary = Button(pygame.Rect(335, 485, 250, 62), "再玩一次", "start")
+            primary = Button(pygame.Rect(275, 550, 250, 62), "再玩一次", "start")
         else:
-            primary = Button(pygame.Rect(335, 485, 250, 62), "下一关", "next")
+            primary = Button(pygame.Rect(275, 550, 250, 62), "下一关", "next")
         primary.draw(self.screen, self.font_button)
         self.buttons.append(primary)
 
-        home = Button(pygame.Rect(335, 570, 250, 56), "返回首页", "home", False)
+        home = Button(pygame.Rect(275, 635, 250, 56), "返回首页", "home", False)
         home.draw(self.screen, self.font_small)
         self.buttons.append(home)
 
@@ -373,8 +379,10 @@ class ArrowGameApp:
             tail = body_points[0]
             shaft_points = [*body_points, neck]
 
-        pygame.draw.lines(self.screen, color, False, shaft_points, width=width)
-        for joint in shaft_points[:-1]:
+        # 每段分别绘制并在连接点补圆，比 draw.lines 的尖锐折角更接近原版。
+        for start, end in zip(shaft_points, shaft_points[1:]):
+            pygame.draw.line(self.screen, color, start, end, width=width)
+        for joint in shaft_points:
             pygame.draw.circle(self.screen, color, joint, width // 2)
         points = [tip, neck + perpendicular * wing, neck - perpendicular * wing]
         pygame.draw.polygon(self.screen, color, points)
@@ -431,7 +439,11 @@ class ArrowGameApp:
                 animation.arrow,
                 progress * total_movement,
             )
-            color = SUCCESS if progress < 0.18 else ARROW_COLOR
+            color = (
+                SUCCESS
+                if progress < 0.18
+                else self.arrow_colors[animation.arrow.arrow_id]
+            )
             self._draw_arrow(animation.arrow, color, points=moving_points)
             return
         else:
@@ -460,3 +472,24 @@ class ArrowGameApp:
     ) -> None:
         image = font.render(text, True, color)
         self.screen.blit(image, image.get_rect(center=center))
+
+    def _draw_lives(
+        self,
+        center: tuple[int, int],
+        remaining: int,
+        total: int,
+    ) -> None:
+        """用 Pygame 图元绘制生命心形，避免依赖字体是否包含心形字符。"""
+        spacing = 31
+        start_x = center[0] - (total - 1) * spacing / 2
+        for index in range(total):
+            x = int(start_x + index * spacing)
+            y = center[1]
+            color = DANGER if index < remaining else PANEL_LIGHT
+            pygame.draw.circle(self.screen, color, (x - 6, y - 5), 7)
+            pygame.draw.circle(self.screen, color, (x + 6, y - 5), 7)
+            pygame.draw.polygon(
+                self.screen,
+                color,
+                ((x - 13, y - 3), (x + 13, y - 3), (x, y + 14)),
+            )
