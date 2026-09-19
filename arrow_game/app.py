@@ -17,6 +17,9 @@ from .core import Arrow, ClickResult, GameSession
 from .data import LEVELS
 from .ui import (
     DARK_THEME,
+    AnimationKind,
+    AnimationQueue,
+    ArrowAnimation,
     AssetProvider,
     EmptyAssetProvider,
     assign_arrow_colors,
@@ -66,11 +69,13 @@ class Button:
 
 
 @dataclass(slots=True)
-class Animation:
-    kind: str
-    arrow: Arrow
+class TrailPulse:
+    """箭头飞过网格点时短暂放大的光点。"""
+
+    cell: tuple[int, int]
+    color: tuple[int, int, int]
     elapsed: float = 0.0
-    duration: float = 0.48
+    duration: float = 0.38
 
     @property
     def done(self) -> bool:
@@ -93,10 +98,9 @@ class ArrowGameApp:
         self.state = ScreenState.START
         self.level_index = 0
         self.model = GameSession(LEVELS[0])
-        self.animation: Animation | None = None
+        self.animations = AnimationQueue()
+        self.trail_pulses: list[TrailPulse] = []
         self.pending_state: ScreenState | None = None
-        self.toast = ""
-        self.toast_timer = 0.0
         self.board_rect = pygame.Rect(0, 0, 0, 0)
         self.cell_size = 0
         self.buttons: list[Button] = []
@@ -132,10 +136,9 @@ class ArrowGameApp:
             DARK_THEME.arrow_palette,
             seed=20260920 + index,
         )
-        self.animation = None
+        self.animations.clear()
+        self.trail_pulses.clear()
         self.pending_state = None
-        self.toast = ""
-        self.toast_timer = 0.0
         self.state = ScreenState.PLAYING
 
     def _handle_events(self) -> None:
@@ -153,21 +156,30 @@ class ArrowGameApp:
                 self._run_action(button.action)
                 return
 
-        if self.state != ScreenState.PLAYING or self.animation is not None:
+        if self.state != ScreenState.PLAYING or self.model.is_over:
             return
         arrow = self._arrow_at_pixel(pos)
-        if arrow is None:
+        if arrow is None or self.animations.contains(arrow.arrow_id):
             return
 
         # UI 只把点击的网格交给规则层，不在这里重复编写路径判断。
         result, _ = self.model.click_cell(arrow.head)
         if result == ClickResult.REMOVED:
             # 箭头越长、距离边界越远，完整抽出需要的动画时间也略长。
-            travel_cells = len(tuple(self.model.board.cells_to_edge(arrow.head, arrow.direction)))
-            duration = min(1.5, 0.35 + (travel_cells + len(arrow.cells)) * 0.08)
-            self.animation = Animation("fly", arrow, duration=duration)
-            self.toast = "漂亮！箭头成功飞出"
-            self.toast_timer = 1.2
+            edge_cells = tuple(
+                self.model.board.cells_to_edge(arrow.head, arrow.direction)
+            )
+            movement_cells = len(edge_cells) + len(arrow.cells)
+            duration = min(0.95, 0.24 + movement_cells * 0.026)
+            self.animations.append(
+                ArrowAnimation(
+                    AnimationKind.FLY,
+                    arrow,
+                    duration=duration,
+                    movement_cells=movement_cells,
+                    trail_cells=(*arrow.cells, *edge_cells),
+                )
+            )
             if self.model.is_cleared:
                 self.pending_state = (
                     ScreenState.GAME_COMPLETE
@@ -175,9 +187,14 @@ class ArrowGameApp:
                     else ScreenState.LEVEL_COMPLETE
                 )
         elif result == ClickResult.BLOCKED:
-            self.animation = Animation("blocked", arrow, duration=0.42)
-            self.toast = f"前方有阻挡，剩余 {self.model.mistakes_left} 次机会"
-            self.toast_timer = 1.5
+            self.animations.append(
+                ArrowAnimation(
+                    AnimationKind.BLOCKED,
+                    arrow,
+                    duration=0.34,
+                    movement_cells=self._blocked_probe_distance(arrow),
+                )
+            )
             if self.model.is_failed:
                 self.pending_state = ScreenState.FAILED
 
@@ -190,21 +207,37 @@ class ArrowGameApp:
             self._start_level(self.level_index + 1)
         elif action == "home":
             self.state = ScreenState.START
-            self.animation = None
+            self.animations.clear()
+            self.trail_pulses.clear()
             self.pending_state = None
         elif action == "quit":
             self.running = False
 
     def _update(self, dt: float) -> None:
-        if self.toast_timer > 0:
-            self.toast_timer = max(0.0, self.toast_timer - dt)
-        if self.animation is not None:
-            self.animation.elapsed += dt
-            if self.animation.done:
-                self.animation = None
-                if self.pending_state is not None:
-                    self.state = self.pending_state
-                    self.pending_state = None
+        for pulse in self.trail_pulses:
+            pulse.elapsed += dt
+        self.trail_pulses = [pulse for pulse in self.trail_pulses if not pulse.done]
+
+        active = self.animations.active
+        if active is not None and active.kind is AnimationKind.FLY:
+            projected_progress = min((active.elapsed + dt) / active.duration, 1.0)
+            passed_steps = int(
+                self._ease(projected_progress) * active.movement_cells
+            )
+            while active.emitted_steps < min(passed_steps, len(active.trail_cells)):
+                cell = active.trail_cells[active.emitted_steps]
+                self.trail_pulses.append(
+                    TrailPulse(cell, self.arrow_colors[active.arrow.arrow_id])
+                )
+                active.emitted_steps += 1
+            # 大棋盘连续操作时也限制瞬时特效数量，已结束的光点会优先丢弃。
+            if len(self.trail_pulses) > 512:
+                self.trail_pulses = self.trail_pulses[-512:]
+
+        self.animations.update(dt)
+        if not self.animations and self.pending_state is not None:
+            self.state = self.pending_state
+            self.pending_state = None
 
     def _layout_board(self) -> None:
         level = self.model.level
@@ -294,13 +327,24 @@ class ArrowGameApp:
                     max(2, int(self.cell_size * 0.035)),
                 )
 
-        animated_id = self.animation.arrow.arrow_id if self.animation else None
+        active = self.animations.active
+        animated_id = active.arrow.arrow_id if active else None
         for arrow in self.model.board.arrows:
             if arrow.arrow_id != animated_id:
                 self._draw_arrow(arrow, self.arrow_colors[arrow.arrow_id])
 
-        if self.animation is not None:
-            self._draw_animation(self.animation)
+        # 已从逻辑棋盘移除、但还在等待播放的箭头继续静态显示。
+        queued = tuple(self.animations)
+        for animation in queued[1:]:
+            if animation.kind is AnimationKind.FLY:
+                self._draw_arrow(
+                    animation.arrow,
+                    self.arrow_colors[animation.arrow.arrow_id],
+                )
+
+        self._draw_trail_pulses()
+        if active is not None:
+            self._draw_animation(active)
 
         pygame.draw.line(self.screen, GRID, (0, 902), (WINDOW_SIZE[0], 902), width=2)
         self._draw_text("提示", self.font_small, INK, (90, 950))
@@ -419,25 +463,16 @@ class ArrowGameApp:
             result.append(current)
         return result
 
-    def _draw_animation(self, animation: Animation) -> None:
-        progress = min(animation.elapsed / animation.duration, 1.0)
+    def _draw_animation(self, animation: ArrowAnimation) -> None:
+        progress = self._ease(animation.progress)
         d_row = animation.arrow.direction.row_step
         d_col = animation.arrow.direction.col_step
         direction = pygame.Vector2(d_col, d_row)
 
-        if animation.kind == "fly":
-            exit_distance = len(
-                tuple(
-                    self.model.board.cells_to_edge(
-                        animation.arrow.head,
-                        animation.arrow.direction,
-                    )
-                )
-            )
-            total_movement = exit_distance + len(animation.arrow.cells)
+        if animation.kind is AnimationKind.FLY:
             moving_points = self._moved_path_points(
                 animation.arrow,
-                progress * total_movement,
+                progress * animation.movement_cells,
             )
             color = (
                 SUCCESS
@@ -447,21 +482,38 @@ class ArrowGameApp:
             self._draw_arrow(animation.arrow, color, points=moving_points)
             return
         else:
-            empty_distance = 0
-            for cell in self.model.board.cells_to_edge(
-                animation.arrow.head,
-                animation.arrow.direction,
-            ):
-                occupant = self.model.board.arrow_at(cell)
-                if occupant is not None and occupant.arrow_id != animation.arrow.arrow_id:
-                    break
-                empty_distance += 1
-            probe = math.sin(progress * math.pi) * (empty_distance + 0.18)
+            probe = math.sin(progress * math.pi) * animation.movement_cells
             moving_points = self._moved_path_points(animation.arrow, probe)
             shake = math.sin(progress * math.pi * 7) * self.cell_size * 0.025
             perpendicular = pygame.Vector2(-direction.y, direction.x)
             moving_points = [point + perpendicular * shake for point in moving_points]
             self._draw_arrow(animation.arrow, DANGER, points=moving_points)
+
+    def _blocked_probe_distance(self, arrow: Arrow) -> float:
+        """在点击瞬间记录碰撞前可前进的距离，避免排队期间状态变化。"""
+        empty_distance = 0
+        for cell in self.model.board.cells_to_edge(arrow.head, arrow.direction):
+            occupant = self.model.board.arrow_at(cell)
+            if occupant is not None and occupant.arrow_id != arrow.arrow_id:
+                break
+            empty_distance += 1
+        return empty_distance + 0.18
+
+    @staticmethod
+    def _ease(progress: float) -> float:
+        """首尾速度为零的平滑插值，减少突然启动和停止的生硬感。"""
+        return progress * progress * (3.0 - 2.0 * progress)
+
+    def _draw_trail_pulses(self) -> None:
+        for pulse in self.trail_pulses:
+            progress = min(pulse.elapsed / pulse.duration, 1.0)
+            strength = math.sin(progress * math.pi)
+            radius = max(2, int(self.cell_size * (0.04 + 0.16 * strength)))
+            color = tuple(
+                int(GRID[channel] + (pulse.color[channel] - GRID[channel]) * strength)
+                for channel in range(3)
+            )
+            pygame.draw.circle(self.screen, color, self._cell_center(pulse.cell), radius)
 
     def _draw_text(
         self,
