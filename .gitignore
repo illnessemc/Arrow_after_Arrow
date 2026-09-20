@@ -3,3 +3,4 @@ __pycache__/
 .venv/
 venv/
 .idea/
+resource/*项目开发说明书*.md

@@ -27,6 +27,9 @@ class ArrowAnimation:
     arrow: Arrow
     duration: float
     movement_cells: float
+    # 阻挡动画保存“第一个阻挡者”的快照，避免动画排队期间地图变化后
+    # 高亮到错误对象。飞出动画不需要该字段。
+    collision_target: Arrow | None = None
     elapsed: float = 0.0
 
     @property

@@ -9,6 +9,10 @@ from arrow_game.core import Level
 
 Color = tuple[int, int, int]
 
+# 专用于碰撞提示的高饱和红色。它刻意不放入普通箭头调色板，确保反馈
+# 不会与关卡的原生配色混淆。
+COLLISION_RED: Color = (255, 36, 64)
+
 
 @dataclass(frozen=True, slots=True)
 class GameTheme:

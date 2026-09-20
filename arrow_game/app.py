@@ -16,6 +16,7 @@ import pygame
 from .core import Arrow, ClickResult, GameSession, Level
 from .data import LEVELS, EndlessLevelFactory
 from .ui import (
+    COLLISION_RED,
     DARK_THEME,
     AnimationKind,
     AnimationQueue,
@@ -27,7 +28,7 @@ from .ui import (
 
 WINDOW_SIZE = (800, 1000)
 FPS = 60
-ARROW_RENDER_SCALE = 4
+ARROW_RENDER_SCALE = 5
 GAME_VERSION = "v1.0"
 
 BACKGROUND = DARK_THEME.background
@@ -94,8 +95,8 @@ class ArrowGameApp:
         pygame.display.set_caption("星箭迷途")
         self.screen = pygame.display.set_mode(WINDOW_SIZE)
         self.clock = pygame.time.Clock()
-        self.font_small = self._font(22)
-        self.font_body = self._font(28)
+        self.font_small = self._font(22, bold=True)
+        self.font_body = self._font(28, bold=True)
         self.font_button = self._font(26, bold=True)
         self.font_title = self._font(58, bold=True)
         self.font_subtitle = self._font(32, bold=True)
@@ -283,9 +284,12 @@ class ArrowGameApp:
             return
 
         # 调试入口与正式规则完全分开；关闭调试后仍由核心规则判断阻挡。
+        blocker = None
         if self.debug_enabled and self.debug_mode:
             result, _ = self.model.remove_cell_for_debug(arrow.head)
         else:
+            # 在规则改变棋盘前记录第一个阻挡者，供表现层精确高亮。
+            blocker = self.model.blocker_of(arrow)
             result, _ = self.model.click_cell(arrow.head)
         if result == ClickResult.REMOVED:
             # 箭头越长、距离边界越远，完整抽出需要的动画时间也略长。
@@ -318,6 +322,7 @@ class ArrowGameApp:
                     arrow,
                     duration=0.34,
                     movement_cells=self._blocked_probe_distance(arrow),
+                    collision_target=blocker,
                 )
             )
             if self.model.is_failed:
@@ -460,8 +465,6 @@ class ArrowGameApp:
         self._draw_gear_button(pygame.Rect(28, 910, 58, 58))
         if self.notice:
             self._draw_text(self.notice, self.font_small, DANGER, (400, 850))
-        else:
-            self._draw_text("ESC 唤出菜单", self.font_small, MUTED, (400, 850))
         version = self.font_small.render(GAME_VERSION, True, MUTED)
         self.screen.blit(version, version.get_rect(bottomright=(776, 976)))
 
@@ -566,9 +569,6 @@ class ArrowGameApp:
             else f"第 {self.level_index + 1} 关"
         )
         self._draw_text(level_title, self.font_subtitle, INK, (400, 42))
-        self._draw_text(
-            f"剩余 {self.model.remaining_arrows}", self.font_small, MUTED, (675, 44)
-        )
         self._draw_lives((400, 84), self.model.mistakes_left, level.mistake_limit)
 
         self._draw_gear_button(pygame.Rect(24, 27, 54, 54))
@@ -586,17 +586,27 @@ class ArrowGameApp:
         pygame.draw.line(self.screen, GRID, (0, 112), (WINDOW_SIZE[0], 112), width=2)
         active = self.animations.active
         animated_id = active.arrow.arrow_id if active else None
+        collision_target_id = (
+            active.collision_target.arrow_id
+            if active is not None
+            and active.kind is AnimationKind.BLOCKED
+            and active.collision_target is not None
+            else None
+        )
         self._draw_board_dots()
         if active is not None and active.kind is AnimationKind.FLY:
             self._draw_fly_trail(active)
         for arrow in self.model.board.arrows:
-            if arrow.arrow_id != animated_id:
+            if arrow.arrow_id not in {animated_id, collision_target_id}:
                 self._draw_arrow(arrow, self.arrow_colors[arrow.arrow_id])
 
         # 已从逻辑棋盘移除、但还在等待播放的箭头继续静态显示。
         queued = tuple(self.animations)
         for animation in queued[1:]:
-            if animation.kind is AnimationKind.FLY:
+            if (
+                animation.kind is AnimationKind.FLY
+                and animation.arrow.arrow_id != collision_target_id
+            ):
                 self._draw_arrow(
                     animation.arrow,
                     self.arrow_colors[animation.arrow.arrow_id],
@@ -882,7 +892,11 @@ class ArrowGameApp:
         self,
         points: Sequence[pygame.Vector2],
     ) -> list[pygame.Vector2]:
-        """把正交折线的直角替换为采样后的二次圆滑曲线。"""
+        """把正交折线的直角替换为接近四分之一圆的三次曲线。
+
+        三次 Bezier 的控制点沿两条直线切向布置，直线与圆角的一阶导数
+        连续，因此不会在接缝处出现肉眼可见的折痕。
+        """
         nodes = self._simplify_polyline(points)
         if len(nodes) <= 2:
             return nodes
@@ -904,13 +918,20 @@ class ArrowGameApp:
             entry = corner - incoming.normalize() * radius
             exit_point = corner + outgoing.normalize() * radius
             result.append(entry)
-            # 二次 Bézier 曲线提供稳定圆角；采样数固定，避免随帧产生抖动。
-            for step in range(1, 13):
-                t = step / 12
+            # kappa 可用三次 Bezier 近似四分之一圆；提高采样密度后，再配合
+            # 高分辨率缩放可显著减轻小尺寸箭头边缘的毛刺。
+            kappa = 0.5522847498
+            incoming_unit = incoming.normalize()
+            outgoing_unit = outgoing.normalize()
+            control_in = entry + incoming_unit * radius * kappa
+            control_out = exit_point - outgoing_unit * radius * kappa
+            for step in range(1, 21):
+                t = step / 20
                 curve = (
-                    entry * (1 - t) ** 2
-                    + corner * 2 * (1 - t) * t
-                    + exit_point * t**2
+                    entry * (1 - t) ** 3
+                    + control_in * 3 * (1 - t) ** 2 * t
+                    + control_out * 3 * (1 - t) * t**2
+                    + exit_point * t**3
                 )
                 result.append(curve)
         result.append(nodes[-1].copy())
@@ -1014,17 +1035,36 @@ class ArrowGameApp:
             )
             return
         else:
+            # 被点击箭头保持原色，先向前试探再退回；真正挡路的第一支箭头
+            # 使用调色板中不存在的醒目红色并横向震动，直接说明“谁挡住了谁”。
             probe = math.sin(progress * math.pi) * animation.movement_cells
             moving_points = self._moved_path_points(animation.arrow, probe)
-            shake = math.sin(progress * math.pi * 7) * self.cell_size * 0.025
+            clicked_shake = (
+                math.sin(progress * math.pi * 7) * self.cell_size * 0.018
+            )
             perpendicular = pygame.Vector2(-direction.y, direction.x)
-            moving_points = [point + perpendicular * shake for point in moving_points]
+            moving_points = [
+                point + perpendicular * clicked_shake for point in moving_points
+            ]
             self._draw_arrow(
                 animation.arrow,
-                DANGER,
+                self.arrow_colors[animation.arrow.arrow_id],
                 points=moving_points,
                 points_are_smoothed=True,
             )
+
+            if animation.collision_target is not None:
+                target_shake = (
+                    math.sin(progress * math.pi * 12)
+                    * math.sin(progress * math.pi)
+                    * self.cell_size
+                    * 0.11
+                )
+                self._draw_arrow(
+                    animation.collision_target,
+                    COLLISION_RED,
+                    offset=perpendicular * target_shake,
+                )
 
     def _blocked_probe_distance(self, arrow: Arrow) -> float:
         """在点击瞬间记录碰撞前可前进的距离，避免排队期间状态变化。"""
