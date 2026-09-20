@@ -63,8 +63,8 @@ GENERATED_SPECS: tuple[GeneratedLevelSpec, ...] = (
     GeneratedLevelSpec(
         "初级回路", 22, 16, seed=20260921,
         min_arrow_length=2, max_arrow_length=24, boundary_break_chance=0.5,
-        path_mix_factor=1,
-        coverage_pattern=CoveragePattern.MIXED_REGIONS,
+        path_mix_factor=2.0,
+        coverage_pattern=CoveragePattern.GLOBAL_WEAVE,
         shape_mix=ArrowShapeMix(straight=0.3, single_turn=0.45, multi_turn=0.25),
         nested_region_ratio=0.35,
         vertical_region_ratio=0.45,
@@ -72,8 +72,8 @@ GENERATED_SPECS: tuple[GeneratedLevelSpec, ...] = (
     GeneratedLevelSpec(
         "折返迷阵", 26, 18, seed=20260922,
         min_arrow_length=2, max_arrow_length=24, boundary_break_chance=0.4,
-        path_mix_factor=0,
-        coverage_pattern=CoveragePattern.MIXED_REGIONS,
+        path_mix_factor=2.0,
+        coverage_pattern=CoveragePattern.GLOBAL_WEAVE,
         shape_mix=ArrowShapeMix(straight=0.25, single_turn=0.4, multi_turn=0.35),
         nested_region_ratio=0.3,
         vertical_region_ratio=0.55,
@@ -81,8 +81,8 @@ GENERATED_SPECS: tuple[GeneratedLevelSpec, ...] = (
     GeneratedLevelSpec(
         "密集交织", 30, 20, seed=20260923,
         min_arrow_length=2, max_arrow_length=28, boundary_break_chance=0.25,
-        path_mix_factor=0,
-        coverage_pattern=CoveragePattern.MIXED_REGIONS,
+        path_mix_factor=2.0,
+        coverage_pattern=CoveragePattern.GLOBAL_WEAVE,
         shape_mix=ArrowShapeMix(straight=0.2, single_turn=0.4, multi_turn=0.4),
         nested_region_ratio=0.4,
         vertical_region_ratio=0.5,
@@ -90,7 +90,9 @@ GENERATED_SPECS: tuple[GeneratedLevelSpec, ...] = (
     GeneratedLevelSpec(
         "异形挑战", 30, 20, seed=20260924,
         min_arrow_length=2, max_arrow_length=10, boundary_break_chance=0.2,
-        path_mix_factor=0,
+        path_mix_factor=2.0,
+        coverage_pattern=CoveragePattern.GLOBAL_WEAVE,
+        shape_mix=ArrowShapeMix(straight=0.3, single_turn=0.4, multi_turn=0.3),
         playable_cells=raised_board_cells(30, 20),
     ),
 )

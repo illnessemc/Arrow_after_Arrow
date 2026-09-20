@@ -1,8 +1,8 @@
 """可配置的在线关卡生成器。
 
-生成器支持交错条带、由外向内的嵌套环以及多区域混合构图，再按形状权重在
-合法位置切分为长短不一的箭头。所有候选都由求解器独立验证，固定种子保证
-同一关每次启动完全一致。
+生成器支持交错条带、嵌套环、多区域混合和全棋盘交织构图，再按形状权重在
+合法位置切分为长短不一的箭头。全局模式还会为每个片段选择可出界方向；所有
+候选最终都由求解器独立验证，固定种子保证同一关每次启动完全一致。
 """
 
 from __future__ import annotations
@@ -27,6 +27,7 @@ class CoveragePattern(Enum):
     INTERLEAVED = auto()
     NESTED_RINGS = auto()
     MIXED_REGIONS = auto()
+    GLOBAL_WEAVE = auto()
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,7 +64,7 @@ class GeneratedLevelSpec:
     max_arrow_length: int = 11
     mistake_limit: int = 3
     boundary_break_chance: float = 0.3
-    path_mix_factor: int = 2
+    path_mix_factor: float = 2.0
     coverage_pattern: CoveragePattern = CoveragePattern.INTERLEAVED
     shape_mix: ArrowShapeMix = ArrowShapeMix()
     nested_region_ratio: float = 0.35
@@ -245,6 +246,9 @@ class SerpentineLevelGenerator:
                 )
             except ValueError:
                 continue
+            oriented_parts = self._orient_parts_for_exit(parts, layout, randomizer)
+            if oriented_parts is None:
+                continue
 
             builder = ManualLevelBuilder(
                 spec.name,
@@ -253,7 +257,7 @@ class SerpentineLevelGenerator:
                 intro=f"自动关卡 · {spec.rows}×{spec.cols} · 找到折线的释放顺序",
                 mistake_limit=spec.mistake_limit,
             )
-            for index, cells in enumerate(parts, start=1):
+            for index, cells in enumerate(oriented_parts, start=1):
                 builder.add_path(f"P{spec.seed % 1000:03d}-{index:02d}", cells)
 
             level = builder.build()
@@ -274,6 +278,76 @@ class SerpentineLevelGenerator:
             f"最后剩余箭头：{remaining}"
         )
 
+    @staticmethod
+    def _orient_parts_for_exit(
+        parts: tuple[tuple[Cell, ...], ...],
+        layout: BoardLayout,
+        randomizer: random.Random,
+    ) -> tuple[tuple[Cell, ...], ...] | None:
+        """为全局切分结果选择方向，同时构造一条可行的移除顺序。
+
+        每个未定向片段都尝试正向和反向；若某个端点沿末段方向扫描时没有
+        遇到其他剩余片段，就可以把该方向固定并从临时占用中移除。移除只会
+        减少阻挡，因此任意安全选择都不会破坏后续已经存在的机会。
+        """
+        owners = {
+            cell: index
+            for index, cells in enumerate(parts)
+            for cell in cells
+        }
+        remaining = set(range(len(parts)))
+        oriented: list[tuple[Cell, ...] | None] = [None] * len(parts)
+        direction_counts = {
+            (-1, 0): 0,
+            (1, 0): 0,
+            (0, -1): 0,
+            (0, 1): 0,
+        }
+
+        def exit_step(cells: tuple[Cell, ...]) -> tuple[int, int]:
+            previous, head = cells[-2], cells[-1]
+            return head[0] - previous[0], head[1] - previous[1]
+
+        def can_exit(index: int, cells: tuple[Cell, ...]) -> bool:
+            head = cells[-1]
+            step = exit_step(cells)
+            cursor = (head[0] + step[0], head[1] + step[1])
+            while layout.contains(cursor):
+                owner = owners.get(cursor)
+                if owner is not None and owner != index:
+                    return False
+                cursor = (cursor[0] + step[0], cursor[1] + step[1])
+            return True
+
+        while remaining:
+            candidates: list[tuple[int, tuple[Cell, ...]]] = []
+            for index in remaining:
+                forward = parts[index]
+                backward = tuple(reversed(forward))
+                if can_exit(index, forward):
+                    candidates.append((index, forward))
+                if can_exit(index, backward):
+                    candidates.append((index, backward))
+            if not candidates:
+                return None
+
+            # 在所有安全方向中优先使用当前数量较少的方向，避免异形棋盘的
+            # 几何边界让箭头整体偏向某一轴。
+            least_used = min(direction_counts[exit_step(cells)] for _, cells in candidates)
+            balanced_candidates = [
+                candidate
+                for candidate in candidates
+                if direction_counts[exit_step(candidate[1])] == least_used
+            ]
+            index, cells = randomizer.choice(balanced_candidates)
+            oriented[index] = cells
+            direction_counts[exit_step(cells)] += 1
+            remaining.remove(index)
+            for cell in parts[index]:
+                owners.pop(cell, None)
+
+        return tuple(cells for cells in oriented if cells is not None)
+
     def _coverage_paths(
         self,
         layout: BoardLayout,
@@ -289,6 +363,16 @@ class SerpentineLevelGenerator:
             mixed_paths = self._mixed_region_paths(layout, spec, randomizer)
             if mixed_paths is not None:
                 return mixed_paths
+        elif spec.coverage_pattern is CoveragePattern.GLOBAL_WEAVE:
+            global_path = self._whole_board_path(layout, randomizer)
+            if global_path is not None:
+                return (
+                    self._mix_path(
+                        global_path,
+                        len(global_path) * spec.path_mix_factor,
+                        randomizer,
+                    ),
+                )
 
         bands = self._rectangular_bands(layout)
         if bands is not None:
@@ -311,6 +395,119 @@ class SerpentineLevelGenerator:
                 )
             return tuple(paths)
         return self._row_run_paths(layout, randomizer)
+
+    def _whole_board_path(
+        self,
+        layout: BoardLayout,
+        randomizer: random.Random,
+    ) -> tuple[Cell, ...] | None:
+        """构造一条覆盖整个布局的连续路径，避免按区域分别生成箭头。"""
+        if len(layout.playable_cells) == layout.rows * layout.cols:
+            return self._rect_path(
+                0,
+                layout.rows,
+                0,
+                layout.cols,
+                horizontal=randomizer.choice((True, False)),
+                randomizer=randomizer,
+            )
+        return self._raised_layout_path(layout)
+
+    @classmethod
+    def _raised_layout_path(cls, layout: BoardLayout) -> tuple[Cell, ...] | None:
+        """为上窄下宽的“凸”形布局拼接一条全局 Hamilton 路径。
+
+        上部矩形使用蛇形路径，末端连接下部矩形 Hamilton 环上的相邻格。
+        将环从连接点断开后，两部分会成为一条不重复、无断点的全图路径。
+        其他异形布局返回 ``None``，继续使用通用降级策略。
+        """
+        spans: list[tuple[int, int]] = []
+        for row in range(layout.rows):
+            columns = sorted(
+                col for cell_row, col in layout.playable_cells if cell_row == row
+            )
+            if not columns or columns != list(range(columns[0], columns[-1] + 1)):
+                return None
+            spans.append((columns[0], columns[-1] + 1))
+
+        shoulder = next(
+            (row for row in range(1, layout.rows) if spans[row] != spans[0]),
+            None,
+        )
+        if shoulder is None:
+            return None
+        stem_left, stem_right = spans[0]
+        if any(span != (stem_left, stem_right) for span in spans[:shoulder]):
+            return None
+        if any(span != (0, layout.cols) for span in spans[shoulder:]):
+            return None
+
+        stem_path = [
+            (row, stem_left + col)
+            for row in range(shoulder)
+            for col in (
+                range(stem_right - stem_left)
+                if row % 2 == 0
+                else range(stem_right - stem_left - 1, -1, -1)
+            )
+        ]
+        target_col = stem_path[-1][1]
+        body_cycle = cls._rectangle_cycle(
+            shoulder,
+            layout.rows,
+            0,
+            layout.cols,
+        )
+        if body_cycle is None:
+            return None
+
+        target = (shoulder, target_col)
+        target_index = body_cycle.index(target)
+        body_path = body_cycle[target_index:] + body_cycle[:target_index]
+        if not cls._are_adjacent(stem_path[-1], body_path[0]):
+            return None
+        return tuple((*stem_path, *body_path))
+
+    @staticmethod
+    def _rectangle_cycle(
+        top: int,
+        bottom: int,
+        left: int,
+        right: int,
+    ) -> tuple[Cell, ...] | None:
+        """返回偶数宽或偶数高矩形的 Hamilton 环（末尾与开头相邻）。"""
+        rows = bottom - top
+        cols = right - left
+        if rows < 2 or cols < 2:
+            return None
+        if cols % 2:
+            if rows % 2:
+                return None
+            transposed = SerpentineLevelGenerator._rectangle_cycle(
+                left,
+                right,
+                top,
+                bottom,
+            )
+            if transposed is None:
+                return None
+            return tuple((col, row) for row, col in transposed)
+
+        cycle: list[Cell] = [(top, col) for col in range(left, right)]
+        current_at_bottom = False
+        cycle.extend((row, right - 1) for row in range(top + 1, bottom))
+        current_at_bottom = True
+        for col in range(right - 2, left - 1, -1):
+            if current_at_bottom:
+                cycle.extend((row, col) for row in range(bottom - 1, top, -1))
+            else:
+                cycle.extend((row, col) for row in range(top + 1, bottom))
+            current_at_bottom = not current_at_bottom
+        return tuple(cycle)
+
+    @staticmethod
+    def _are_adjacent(first: Cell, second: Cell) -> bool:
+        return abs(first[0] - second[0]) + abs(first[1] - second[1]) == 1
 
     def _mixed_region_paths(
         self,
@@ -549,7 +746,7 @@ class SerpentineLevelGenerator:
     @staticmethod
     def _mix_path(
         path: tuple[Cell, ...],
-        steps: int,
+        steps: float,
         randomizer: random.Random,
     ) -> tuple[Cell, ...]:
         """用 backbite 变换打散规则蛇形，同时保持全覆盖和连续性。
@@ -561,7 +758,7 @@ class SerpentineLevelGenerator:
         mixed = list(path)
         positions = {cell: index for index, cell in enumerate(mixed)}
 
-        for _ in range(steps):
+        for _ in range(round(steps)):
             row, col = mixed[0]
             neighbours = (
                 (row - 1, col),

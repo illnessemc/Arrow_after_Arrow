@@ -90,11 +90,13 @@ lab2/
 
 正式关采用在线、确定性生成：程序启动时根据 `GeneratedLevelSpec` 和固定种子
 生成路径，无需逐支手写箭头。`INTERLEAVED` 策略把地图拆成方向交替的矩形带；
-`NESTED_RINGS` 策略从外向内生成左右交替开口的嵌套环，使外层折线实际阻挡
-内层箭头。正式关主要使用 `MIXED_REGIONS`，在同一棋盘混合局部嵌套、横向
-折返和纵向折返区域。`ArrowShapeMix` 进一步控制直线、单转角、多转角箭头的
-相对权重。生成结果必须满足四方向数量、三类箭头最低占比、折线占比、短箭头
-占比、形状重复率和平均可选数等质量门槛，避免整关退化成单一构图。
+`NESTED_RINGS` 和 `MIXED_REGIONS` 仍可用于特定主题关。当前正式关使用
+`GLOBAL_WEAVE`：先构造一条覆盖整个棋盘的连续路径，在全图范围内扰动后统一
+切分，不再把棋盘分成互不相关的区域。每个片段会分别尝试正向和反向，生成器
+按实际出界路径为其定向，从而在保持全局交织的同时直接构造可解顺序。
+`ArrowShapeMix` 控制直线、单转角、多转角箭头的相对权重。生成结果必须满足
+四方向数量、三类箭头最低占比、折线占比、短箭头占比、形状重复率和平均可选
+数等质量门槛，避免整关退化成单一构图。
 
 增加一关只需要追加规格：
 
@@ -107,7 +109,7 @@ GeneratedLevelSpec(
     min_arrow_length=6,
     max_arrow_length=16,
     boundary_break_chance=0.2,
-    coverage_pattern=CoveragePattern.MIXED_REGIONS,
+    coverage_pattern=CoveragePattern.GLOBAL_WEAVE,
     shape_mix=ArrowShapeMix(
         straight=0.3,
         single_turn=0.4,
