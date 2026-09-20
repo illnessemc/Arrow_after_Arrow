@@ -22,7 +22,7 @@ class FixedLevelCatalogTest(unittest.TestCase):
             [
                 "方向入门",
                 "潮汐回廊",
-                "星雨高塔",
+                "四向机关",
                 "同心星环",
                 "虹桥织网",
                 "星门终阵",
