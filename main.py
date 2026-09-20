@@ -1,4 +1,4 @@
-"""一箭又一箭：命令行入口。"""
+"""星箭迷途：命令行入口。"""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from collections.abc import Sequence
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     """解析启动参数；普通版本不会暴露任何调试能力。"""
-    parser = argparse.ArgumentParser(description="启动《一箭又一箭》")
+    parser = argparse.ArgumentParser(description="启动《星箭迷途》")
     parser.add_argument(
         "--debug",
         action="store_true",

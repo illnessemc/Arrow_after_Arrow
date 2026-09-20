@@ -1,7 +1,7 @@
-"""Pygame 图形界面、输入处理与基础动画。
+"""“星箭迷途”的 Pygame 图形界面、输入处理与基础动画。
 
 本模块只协调输入、页面状态和显示效果；阻挡判定、格子占用、失误等规则
-均由 core 包负责。当前阶段只用 Pygame 图元绘制，不引入额外美术素材。
+均由 core 包负责。页面优先使用 ``resource/image`` 素材，缺失时回退到图元。
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ from .ui import (
     AnimationQueue,
     ArrowAnimation,
     AssetProvider,
-    EmptyAssetProvider,
+    DirectoryAssetProvider,
     assign_arrow_colors,
 )
 
@@ -90,7 +90,7 @@ class ArrowGameApp:
         endless_factory: EndlessLevelFactory | None = None,
     ) -> None:
         pygame.init()
-        pygame.display.set_caption("一箭又一箭")
+        pygame.display.set_caption("星箭迷途")
         self.screen = pygame.display.set_mode(WINDOW_SIZE)
         self.clock = pygame.time.Clock()
         self.font_small = self._font(22)
@@ -98,7 +98,12 @@ class ArrowGameApp:
         self.font_button = self._font(26, bold=True)
         self.font_title = self._font(58, bold=True)
         self.font_subtitle = self._font(32, bold=True)
-        self.assets = assets or EmptyAssetProvider()
+        self.assets = assets or DirectoryAssetProvider.project_default()
+        logo = self.assets.image("app_logo")
+        if logo is not None:
+            pygame.display.set_icon(
+                pygame.transform.smoothscale(logo, (64, 64))
+            )
         self.endless_factory = endless_factory or EndlessLevelFactory()
 
         self.state = ScreenState.START
@@ -258,7 +263,7 @@ class ArrowGameApp:
         elif self.state is ScreenState.LEVEL_SELECT:
             self._return_home()
         elif self.state is ScreenState.START:
-            self.running = False
+            self._open_settings()
         else:
             self._return_home()
 
@@ -428,45 +433,33 @@ class ArrowGameApp:
             self._draw_result()
 
     def _draw_start(self) -> None:
-        pygame.draw.circle(self.screen, PANEL_LIGHT, (75, 90), 125)
-        pygame.draw.circle(self.screen, PANEL, (745, 905), 155)
-        title_image = self.assets.image("start_title")
-        if title_image is None:
-            self._draw_text("一箭又一箭", self.font_title, INK, (400, 225))
-        else:
-            self.screen.blit(title_image, title_image.get_rect(center=(400, 225)))
-        self._draw_text("观察路径，依次送走每一支箭", self.font_body, MUTED, (400, 300))
+        if not self._draw_asset("start_title", (400, 245), (610, 205)):
+            self._draw_text("星箭迷途", self.font_title, INK, (400, 245))
 
-        card = pygame.Rect(110, 375, 580, 185)
-        pygame.draw.rect(self.screen, PANEL, card, border_radius=22)
-        pygame.draw.rect(self.screen, PANEL_LIGHT, card, width=2, border_radius=22)
-        instructions = (
-            "前方没有箭头：飞出棋盘",
-            "前方存在箭头：碰撞并消耗机会",
-            "清空所有箭头即可过关",
-        )
-        for index, line in enumerate(instructions):
-            self._draw_text(line, self.font_small, INK, (400, 415 + index * 52))
-
-        button = Button(pygame.Rect(275, 595, 250, 64), "开始游戏", "start")
+        button = Button(pygame.Rect(245, 440, 310, 76), "开始游戏", "start")
         self._draw_button(button, self.font_button)
         self.buttons.append(button)
 
         select = Button(
-            pygame.Rect(275, 680, 250, 58), "选择关卡", "level_select", False
+            pygame.Rect(255, 545, 290, 68), "选择关卡", "level_select", False
         )
         self._draw_button(select, self.font_button)
         self.buttons.append(select)
         endless = Button(
-            pygame.Rect(275, 760, 250, 58), "无尽模式", "endless", False
+            pygame.Rect(255, 640, 290, 68), "无尽模式", "endless", False
         )
         self._draw_button(endless, self.font_button)
         self.buttons.append(endless)
+        quit_button = Button(
+            pygame.Rect(255, 735, 290, 68), "退出游戏", "quit", False
+        )
+        self._draw_button(quit_button, self.font_button)
+        self.buttons.append(quit_button)
         self._draw_gear_button(pygame.Rect(28, 910, 58, 58))
         if self.notice:
-            self._draw_text(self.notice, self.font_small, DANGER, (400, 858))
+            self._draw_text(self.notice, self.font_small, DANGER, (400, 850))
         else:
-            self._draw_text("ESC 退出游戏", self.font_small, MUTED, (400, 858))
+            self._draw_text("ESC 唤出菜单", self.font_small, MUTED, (400, 850))
 
     def _draw_level_select(self) -> None:
         """绘制独立关卡选择页，所有已配置关卡都可直接进入。"""
@@ -495,11 +488,12 @@ class ArrowGameApp:
 
     def _draw_settings(self) -> None:
         """绘制全局设置；游戏内打开时额外提供本关控制。"""
-        self._draw_text("设置", self.font_title, INK, (400, 150))
+        self._draw_asset("icon_settings", (400, 118), (104, 104))
+        self._draw_text("设置", self.font_subtitle, INK, (400, 205))
         if self.debug_enabled:
             debug_text = f"调试模式：{'开' if self.debug_mode else '关'}"
             debug = Button(
-                pygame.Rect(255, 240, 290, 64), debug_text, "toggle_debug"
+                pygame.Rect(255, 260, 290, 64), debug_text, "toggle_debug"
             )
             self._draw_button(debug, self.font_button)
             self.buttons.append(debug)
@@ -507,14 +501,14 @@ class ArrowGameApp:
                 "开启后点击任意箭头都可强制飞出",
                 self.font_small,
                 MUTED,
-                (400, 330),
+                (400, 350),
             )
         else:
             self._draw_text(
                 "普通版本 · 按 Esc 可随时返回游戏",
                 self.font_small,
                 MUTED,
-                (400, 275),
+                (400, 300),
             )
 
         if self.settings_return_state is ScreenState.PLAYING:
@@ -668,82 +662,67 @@ class ArrowGameApp:
         is_endless_complete = (
             self.endless_mode and self.state == ScreenState.LEVEL_COMPLETE
         )
-        accent = DANGER if is_failure else SUCCESS
-        icon = "×" if is_failure else "✓"
-        heading = (
-            "本关失败"
-            if is_failure
-            else (
-                f"无尽第 {self.endless_round} 关完成"
-                if is_endless_complete
-                else ("六关全部通关！" if is_final else "顺利过关！")
-            )
-        )
-        detail = (
-            "失误机会已经用完，再观察一下箭头方向吧"
-            if is_failure
-            else (
-                "下一关将使用新的随机种子在线生成"
-                if is_endless_complete
-                else (
-                    "固定关卡已完成，可以继续挑战无尽模式"
-                    if is_final
-                    else "所有箭头都飞出了棋盘"
-                )
-            )
-        )
-
-        pygame.draw.circle(self.screen, accent, (400, 245), 72)
+        heading = "失败" if is_failure else "胜利"
         result_icon_key = "result_failed_icon" if is_failure else "result_complete_icon"
-        result_icon = self.assets.image(result_icon_key)
-        if result_icon is None:
-            self._draw_text(icon, self.font_title, INK, (400, 235))
-        else:
-            image = pygame.transform.smoothscale(result_icon, (112, 112))
-            self.screen.blit(image, image.get_rect(center=(400, 245)))
-        self._draw_text(heading, self.font_title, INK, (400, 380))
-        self._draw_text(detail, self.font_body, MUTED, (400, 450))
-        if self.notice:
-            self._draw_text(self.notice, self.font_small, DANGER, (400, 495))
+        if not self._draw_asset(result_icon_key, (400, 245), (540, 270)):
+            self._draw_text(heading, self.font_title, INK, (400, 245))
 
         if is_failure:
-            primary = Button(pygame.Rect(275, 550, 250, 62), "重试本关", "restart")
+            self._draw_text(
+                "可惜了，在观察一下吧",
+                self.font_body,
+                INK,
+                (400, 430),
+            )
+        else:
+            # 三颗星以中间最大、两侧等距且相反角度的方式对称排列。
+            self._draw_asset("result_star", (300, 455), (78, 78), angle=12)
+            self._draw_asset("result_star", (400, 435), (112, 112))
+            self._draw_asset("result_star", (500, 455), (78, 78), angle=-12)
+        if self.notice:
+            self._draw_text(self.notice, self.font_small, DANGER, (400, 535))
+
+        if is_failure:
+            primary = Button(pygame.Rect(245, 585, 310, 72), "重试本关", "restart")
         elif is_endless_complete:
             primary = Button(
-                pygame.Rect(275, 550, 250, 62), "继续挑战", "endless_next"
+                pygame.Rect(255, 585, 290, 68), "继续挑战", "endless_next"
             )
         elif is_final:
             primary = Button(
-                pygame.Rect(275, 550, 250, 62), "进入无尽模式", "endless"
+                pygame.Rect(255, 585, 290, 68), "进入无尽模式", "endless"
             )
         else:
-            primary = Button(pygame.Rect(275, 550, 250, 62), "下一关", "next")
+            primary = Button(pygame.Rect(255, 585, 290, 68), "下一关", "next")
         self._draw_button(primary, self.font_button)
         self.buttons.append(primary)
 
-        home = Button(pygame.Rect(275, 635, 250, 56), "返回首页", "home", False)
+        home = Button(pygame.Rect(255, 680, 290, 64), "返回首页", "home", False)
         self._draw_button(home, self.font_small)
         self.buttons.append(home)
 
     def _draw_button(self, button: Button, font: pygame.font.Font) -> None:
-        """优先使用 ``button_<action>`` 素材，没有时回退到 Pygame 图元。"""
+        """开始/重试使用主按钮，其余文字按钮使用副按钮。"""
+        use_primary = button.action in {"start", "restart"}
+        button.primary = use_primary
+        background = self.assets.image(f"button_{button.action}")
+        if background is None:
+            background = self.assets.image(
+                "button_primary" if use_primary else "button_secondary"
+            )
         button.draw(
             self.screen,
             font,
-            background_image=self.assets.image(f"button_{button.action}"),
+            background_image=background,
         )
 
     def _draw_gear_button(self, rect: pygame.Rect) -> None:
         """优先绘制设置图标素材；缺省时使用 Pygame 图元齿轮。"""
         button = Button(rect, "", "settings", False)
-        self._draw_button(button, self.font_small)
-        gear_image = self.assets.image("icon_settings")
-        if gear_image is not None:
-            size = max(24, rect.width - 18)
-            image = pygame.transform.smoothscale(gear_image, (size, size))
-            self.screen.blit(image, image.get_rect(center=rect.center))
+        if self._draw_asset("icon_settings", rect.center, rect.size):
             self.buttons.append(button)
             return
+        pygame.draw.rect(self.screen, PANEL, rect, border_radius=14)
         center = pygame.Vector2(rect.center)
         for index in range(8):
             angle = index * math.pi / 4
@@ -754,6 +733,32 @@ class ArrowGameApp:
         pygame.draw.circle(self.screen, INK, rect.center, 13)
         pygame.draw.circle(self.screen, PANEL, rect.center, 6)
         self.buttons.append(button)
+
+    def _draw_asset(
+        self,
+        key: str,
+        center: tuple[int, int],
+        maximum_size: tuple[int, int],
+        *,
+        angle: float = 0.0,
+    ) -> bool:
+        """保持比例绘制素材，并可围绕中心轻微旋转。"""
+        image = self.assets.image(key)
+        if image is None:
+            return False
+        ratio = min(
+            maximum_size[0] / image.get_width(),
+            maximum_size[1] / image.get_height(),
+        )
+        size = (
+            max(1, round(image.get_width() * ratio)),
+            max(1, round(image.get_height() * ratio)),
+        )
+        rendered = pygame.transform.smoothscale(image, size)
+        if angle:
+            rendered = pygame.transform.rotozoom(rendered, angle, 1.0)
+        self.screen.blit(rendered, rendered.get_rect(center=center))
+        return True
 
     def _cell_center(self, cell: tuple[int, int]) -> pygame.Vector2:
         row, col = cell
@@ -1056,9 +1061,23 @@ class ArrowGameApp:
         remaining: int,
         total: int,
     ) -> None:
-        """用 Pygame 图元绘制生命心形，避免依赖字体是否包含心形字符。"""
-        spacing = 31
+        """优先使用生命素材；已消耗的生命以半透明状态保留位置。"""
+        heart = self.assets.image("life")
+        spacing = 35
         start_x = center[0] - (total - 1) * spacing / 2
+        if heart is not None:
+            size = (32, 28)
+            full_heart = pygame.transform.smoothscale(heart, size)
+            spent_heart = full_heart.copy()
+            spent_heart.set_alpha(55)
+            for index in range(total):
+                image = full_heart if index < remaining else spent_heart
+                rect = image.get_rect(
+                    center=(round(start_x + index * spacing), center[1])
+                )
+                self.screen.blit(image, rect)
+            return
+
         for index in range(total):
             x = int(start_x + index * spacing)
             y = center[1]
