@@ -58,15 +58,20 @@ class ArrowShapeLimits:
 
     max_straight_length: int = 6
     max_single_turn_length: int = 14
+    max_axis_span: int = 9
 
     def __post_init__(self) -> None:
         if self.max_straight_length < 2:
             raise ValueError("直线箭头长度上限不能小于 2")
         if self.max_single_turn_length < self.max_straight_length:
             raise ValueError("单转角箭头上限不能短于直线箭头上限")
+        if self.max_axis_span < 2:
+            raise ValueError("箭头单轴跨度上限不能小于 2")
 
-    def allows(self, length: int, turn_category: int) -> bool:
+    def allows(self, length: int, turn_category: int, axis_span: int) -> bool:
         """长直线被拒绝；更长的箭头必须包含至少两个转角。"""
+        if axis_span > self.max_axis_span:
+            return False
         if turn_category == 0:
             return length <= self.max_straight_length
         if turn_category == 1:
@@ -134,6 +139,33 @@ class GeneratedLevel:
 
 
 @dataclass(frozen=True, slots=True)
+class DependencyMetrics:
+    """描述初始棋盘的箭头制约网络，用于拒绝彼此孤立的关卡。"""
+
+    arrow_count: int
+    edge_count: int
+    initial_safe_count: int
+    cross_direction_edges: int
+    largest_component_size: int
+
+    @property
+    def average_dependencies(self) -> float:
+        return self.edge_count / self.arrow_count if self.arrow_count else 0.0
+
+    @property
+    def initial_safe_ratio(self) -> float:
+        return self.initial_safe_count / self.arrow_count if self.arrow_count else 0.0
+
+    @property
+    def cross_direction_ratio(self) -> float:
+        return self.cross_direction_edges / self.edge_count if self.edge_count else 0.0
+
+    @property
+    def largest_component_ratio(self) -> float:
+        return self.largest_component_size / self.arrow_count if self.arrow_count else 0.0
+
+
+@dataclass(frozen=True, slots=True)
 class LevelQualityPolicy:
     """自动关卡的最低质量门槛，避免生成单一方向的重复堆叠。"""
 
@@ -144,6 +176,10 @@ class LevelQualityPolicy:
     max_average_choice_ratio: float = 0.18
     min_each_direction: int = 2
     max_repeated_shape_ratio: float = 0.2
+    min_average_dependencies: float = 2.0
+    max_initial_safe_ratio: float = 0.2
+    min_cross_direction_dependency_ratio: float = 0.55
+    min_largest_dependency_component_ratio: float = 0.9
 
     def accepts(self, level: Level, report: SolveReport) -> bool:
         arrow_count = len(level.arrows)
@@ -190,7 +226,70 @@ class LevelQualityPolicy:
         if max(shape_counts.values()) / arrow_count > self.max_repeated_shape_ratio:
             return False
 
+        dependencies = self.dependency_metrics(level)
+        if dependencies.average_dependencies < self.min_average_dependencies:
+            return False
+        if dependencies.initial_safe_ratio > self.max_initial_safe_ratio:
+            return False
+        if (
+            dependencies.cross_direction_ratio
+            < self.min_cross_direction_dependency_ratio
+        ):
+            return False
+        if (
+            dependencies.largest_component_ratio
+            < self.min_largest_dependency_component_ratio
+        ):
+            return False
+
         return report.average_choices / arrow_count <= self.max_average_choice_ratio
+
+    @staticmethod
+    def dependency_metrics(level: Level) -> DependencyMetrics:
+        """扫描每支箭头的完整出界射线，建立有向依赖边和无向连通图。"""
+        board = level.create_board()
+        arrows = {arrow.arrow_id: arrow for arrow in level.arrows}
+        edges: set[tuple[str, str]] = set()
+        for arrow in level.arrows:
+            for cell in board.cells_to_edge(arrow.head, arrow.direction):
+                blocker = board.arrow_at(cell)
+                if blocker is not None and blocker.arrow_id != arrow.arrow_id:
+                    edges.add((arrow.arrow_id, blocker.arrow_id))
+
+        constrained = {source for source, _ in edges}
+        cross_direction_edges = sum(
+            arrows[source].direction is not arrows[target].direction
+            for source, target in edges
+        )
+        graph = {arrow_id: set() for arrow_id in arrows}
+        for source, target in edges:
+            graph[source].add(target)
+            graph[target].add(source)
+
+        visited: set[str] = set()
+        largest_component = 0
+        for root in graph:
+            if root in visited:
+                continue
+            stack = [root]
+            visited.add(root)
+            component_size = 0
+            while stack:
+                current = stack.pop()
+                component_size += 1
+                for neighbour in graph[current]:
+                    if neighbour not in visited:
+                        visited.add(neighbour)
+                        stack.append(neighbour)
+            largest_component = max(largest_component, component_size)
+
+        return DependencyMetrics(
+            arrow_count=len(arrows),
+            edge_count=len(edges),
+            initial_safe_count=len(arrows) - len(constrained),
+            cross_direction_edges=cross_direction_edges,
+            largest_component_size=largest_component,
+        )
 
     @staticmethod
     def _turn_count(cells: tuple[Cell, ...]) -> int:
@@ -319,8 +418,10 @@ class SerpentineLevelGenerator:
             for index, cells in enumerate(parts)
             for cell in cells
         }
+        all_owners = dict(owners)
         remaining = set(range(len(parts)))
         oriented: list[tuple[Cell, ...] | None] = [None] * len(parts)
+        oriented_steps: dict[int, tuple[int, int]] = {}
         direction_counts = {
             (-1, 0): 0,
             (1, 0): 0,
@@ -343,6 +444,19 @@ class SerpentineLevelGenerator:
                 cursor = (cursor[0] + step[0], cursor[1] + step[1])
             return True
 
+        def dependency_ids(index: int, cells: tuple[Cell, ...]) -> set[int]:
+            """返回该方向射线上已经安排为更早移除的箭头。"""
+            head = cells[-1]
+            step = exit_step(cells)
+            cursor = (head[0] + step[0], head[1] + step[1])
+            dependencies: set[int] = set()
+            while layout.contains(cursor):
+                owner = all_owners.get(cursor)
+                if owner is not None and owner != index and owner not in remaining:
+                    dependencies.add(owner)
+                cursor = (cursor[0] + step[0], cursor[1] + step[1])
+            return dependencies
+
         while remaining:
             candidates: list[tuple[int, tuple[Cell, ...]]] = []
             for index in remaining:
@@ -355,17 +469,34 @@ class SerpentineLevelGenerator:
             if not candidates:
                 return None
 
-            # 在所有安全方向中优先使用当前数量较少的方向，避免异形棋盘的
-            # 几何边界让箭头整体偏向某一轴。
-            least_used = min(direction_counts[exit_step(cells)] for _, cells in candidates)
-            balanced_candidates = [
+            def candidate_score(
+                candidate: tuple[int, tuple[Cell, ...]],
+            ) -> tuple[int, int, int, int]:
+                index, cells = candidate
+                step = exit_step(cells)
+                dependencies = dependency_ids(index, cells)
+                cross_direction = sum(
+                    oriented_steps[dependency] != step
+                    for dependency in dependencies
+                )
+                return (
+                    int(bool(dependencies)),
+                    cross_direction,
+                    len(dependencies),
+                    -direction_counts[step],
+                )
+
+            best_score = max(candidate_score(candidate) for candidate in candidates)
+            best_candidates = [
                 candidate
                 for candidate in candidates
-                if direction_counts[exit_step(candidate[1])] == least_used
+                if candidate_score(candidate) == best_score
             ]
-            index, cells = randomizer.choice(balanced_candidates)
+            index, cells = randomizer.choice(best_candidates)
             oriented[index] = cells
-            direction_counts[exit_step(cells)] += 1
+            step = exit_step(cells)
+            oriented_steps[index] = step
+            direction_counts[step] += 1
             remaining.remove(index)
             for cell in parts[index]:
                 owners.pop(cell, None)
@@ -850,6 +981,12 @@ class SerpentineLevelGenerator:
                 turns += before != after
             return min(turns, 2)
 
+        def axis_span(start: int, end: int) -> int:
+            cells = path[start : end + 1]
+            rows = [cell[0] for cell in cells]
+            cols = [cell[1] for cell in cells]
+            return max(max(rows) - min(rows) + 1, max(cols) - min(cols) + 1)
+
         # 在部分边界转角主动断开依赖链，产生多个同时可飞出的候选箭头。
         boundary_cuts = {
             end
@@ -863,7 +1000,11 @@ class SerpentineLevelGenerator:
             remaining_shape = turn_category(start, count - 1)
             if (
                 minimum <= remaining <= maximum
-                and shape_limits.allows(remaining, remaining_shape)
+                and shape_limits.allows(
+                    remaining,
+                    remaining_shape,
+                    axis_span(start, count - 1),
+                )
             ):
                 return (path[start:],)
 
@@ -877,6 +1018,7 @@ class SerpentineLevelGenerator:
                 and shape_limits.allows(
                     end - start + 1,
                     turn_category(start, end),
+                    axis_span(start, end),
                 )
             ]
             randomizer.shuffle(candidates)

@@ -62,7 +62,7 @@ def raised_board_cells(rows: int, cols: int) -> frozenset[tuple[int, int]]:
 GENERATED_SPECS: tuple[GeneratedLevelSpec, ...] = (
     GeneratedLevelSpec(
         "初级回路", 22, 16, seed=20260921,
-        min_arrow_length=2, max_arrow_length=24, boundary_break_chance=0.5,
+        min_arrow_length=2, max_arrow_length=16, boundary_break_chance=0.5,
         path_mix_factor=2.0,
         coverage_pattern=CoveragePattern.GLOBAL_WEAVE,
         shape_mix=ArrowShapeMix(straight=0.3, single_turn=0.45, multi_turn=0.25),
@@ -71,7 +71,7 @@ GENERATED_SPECS: tuple[GeneratedLevelSpec, ...] = (
     ),
     GeneratedLevelSpec(
         "折返迷阵", 26, 18, seed=20260922,
-        min_arrow_length=2, max_arrow_length=24, boundary_break_chance=0.4,
+        min_arrow_length=2, max_arrow_length=16, boundary_break_chance=0.4,
         path_mix_factor=2.0,
         coverage_pattern=CoveragePattern.GLOBAL_WEAVE,
         shape_mix=ArrowShapeMix(straight=0.25, single_turn=0.4, multi_turn=0.35),
@@ -79,8 +79,8 @@ GENERATED_SPECS: tuple[GeneratedLevelSpec, ...] = (
         vertical_region_ratio=0.55,
     ),
     GeneratedLevelSpec(
-        "密集交织", 30, 20, seed=20260923,
-        min_arrow_length=2, max_arrow_length=28, boundary_break_chance=0.25,
+        "密集交织", 30, 20, seed=20261115,
+        min_arrow_length=2, max_arrow_length=18, boundary_break_chance=0.25,
         path_mix_factor=2.0,
         coverage_pattern=CoveragePattern.GLOBAL_WEAVE,
         shape_mix=ArrowShapeMix(straight=0.2, single_turn=0.4, multi_turn=0.4),
