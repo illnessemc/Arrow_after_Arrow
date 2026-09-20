@@ -28,6 +28,7 @@ from .ui import (
 WINDOW_SIZE = (800, 1000)
 FPS = 60
 ARROW_RENDER_SCALE = 4
+GAME_VERSION = "v1.0"
 
 BACKGROUND = DARK_THEME.background
 PANEL = DARK_THEME.panel
@@ -259,7 +260,7 @@ class ArrowGameApp:
         if self.state is ScreenState.PLAYING:
             self._open_settings()
         elif self.state is ScreenState.SETTINGS:
-            self.state = self.settings_return_state
+            self._return_home()
         elif self.state is ScreenState.LEVEL_SELECT:
             self._return_home()
         elif self.state is ScreenState.START:
@@ -433,8 +434,9 @@ class ArrowGameApp:
             self._draw_result()
 
     def _draw_start(self) -> None:
-        if not self._draw_asset("start_title", (400, 245), (610, 205)):
-            self._draw_text("星箭迷途", self.font_title, INK, (400, 245))
+        self._draw_asset("app_logo", (400, 105), (112, 112))
+        if not self._draw_asset("start_title", (400, 255), (610, 190)):
+            self._draw_text("星箭迷途", self.font_title, INK, (400, 255))
 
         button = Button(pygame.Rect(245, 440, 310, 76), "开始游戏", "start")
         self._draw_button(button, self.font_button)
@@ -460,6 +462,8 @@ class ArrowGameApp:
             self._draw_text(self.notice, self.font_small, DANGER, (400, 850))
         else:
             self._draw_text("ESC 唤出菜单", self.font_small, MUTED, (400, 850))
+        version = self.font_small.render(GAME_VERSION, True, MUTED)
+        self.screen.blit(version, version.get_rect(bottomright=(776, 976)))
 
     def _draw_level_select(self) -> None:
         """绘制独立关卡选择页，所有已配置关卡都可直接进入。"""
@@ -503,14 +507,6 @@ class ArrowGameApp:
                 MUTED,
                 (400, 350),
             )
-        else:
-            self._draw_text(
-                "普通版本 · 按 Esc 可随时返回游戏",
-                self.font_small,
-                MUTED,
-                (400, 300),
-            )
-
         if self.settings_return_state is ScreenState.PLAYING:
             if self.debug_enabled and self.debug_mode and not self.endless_mode:
                 if self.level_index > 0:
