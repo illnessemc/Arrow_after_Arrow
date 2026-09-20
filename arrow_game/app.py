@@ -27,7 +27,7 @@ from .ui import (
 
 WINDOW_SIZE = (800, 1000)
 FPS = 60
-ARROW_RENDER_SCALE = 3
+ARROW_RENDER_SCALE = 4
 
 BACKGROUND = DARK_THEME.background
 PANEL = DARK_THEME.panel
@@ -454,6 +454,8 @@ class ArrowGameApp:
         active = self.animations.active
         animated_id = active.arrow.arrow_id if active else None
         self._draw_board_dots()
+        if active is not None and active.kind is AnimationKind.FLY:
+            self._draw_fly_trail(active)
         for arrow in self.model.board.arrows:
             if arrow.arrow_id != animated_id:
                 self._draw_arrow(arrow, self.arrow_colors[arrow.arrow_id])
@@ -485,6 +487,36 @@ class ArrowGameApp:
         for cell in self.model.board.layout.playable_cells:
             if cell not in visually_occupied:
                 pygame.draw.circle(self.screen, GRID, self._cell_center(cell), radius)
+
+    def _draw_fly_trail(self, animation: ArrowAnimation) -> None:
+        """让箭尾经过的棋盘点短暂放大，再平滑恢复为普通大小。
+
+        特效只使用棋盘点本身的低对比度颜色，不绘制彩色残影。脉冲完全由
+        当前动画进度推导，不额外保存粒子对象，因此切关和重开时没有残留。
+        """
+        movement = self._ease(animation.progress) * animation.movement_cells
+        path_cells = [
+            *animation.arrow.cells,
+            *self.model.board.cells_to_edge(
+                animation.arrow.head,
+                animation.arrow.direction,
+            ),
+        ]
+        base_radius = max(1, round(self.cell_size * 0.055))
+        pulse_radius = max(base_radius + 2, round(self.cell_size * 0.16))
+        pulse_duration = 1.8
+
+        for index, cell in enumerate(path_cells):
+            age = movement - (index + 0.35)
+            if age < 0 or not self.model.board.layout.contains(cell):
+                continue
+            if age < pulse_duration:
+                phase = age / pulse_duration
+                strength = math.sin(math.pi * phase) ** 2
+                radius = round(base_radius + (pulse_radius - base_radius) * strength)
+            else:
+                radius = base_radius
+            pygame.draw.circle(self.screen, GRID, self._cell_center(cell), radius)
 
 
     def _draw_result(self) -> None:
@@ -634,11 +666,14 @@ class ArrowGameApp:
 
         high_width = width * scale
         high_shaft = [scaled(point) for point in shaft_points]
-        for start, end in zip(high_shaft, high_shaft[1:]):
-            pygame.draw.line(layer, color, start, end, width=high_width)
-        for joint in high_shaft:
-            pygame.draw.circle(layer, color, joint, high_width // 2 + scale)
-        pygame.draw.polygon(layer, color, [scaled(point) for point in head_points])
+        # 整条轴线一次描边，避免旧方案在每个曲线采样点叠圆产生波浪状边缘。
+        pygame.draw.lines(layer, color, False, high_shaft, width=high_width)
+        cap_radius = max(1, high_width // 2)
+        pygame.draw.circle(layer, color, high_shaft[0], cap_radius)
+        pygame.draw.circle(layer, color, high_shaft[-1], cap_radius)
+        high_head = [scaled(point) for point in head_points]
+        pygame.draw.polygon(layer, color, high_head)
+        pygame.draw.aalines(layer, color, True, high_head)
         pygame.draw.circle(layer, color, scaled(tail), tail_radius * scale)
 
         return pygame.transform.smoothscale(layer, target_size), (left, top)
@@ -686,8 +721,8 @@ class ArrowGameApp:
             exit_point = corner + outgoing.normalize() * radius
             result.append(entry)
             # 二次 Bézier 曲线提供稳定圆角；采样数固定，避免随帧产生抖动。
-            for step in range(1, 7):
-                t = step / 6
+            for step in range(1, 13):
+                t = step / 12
                 curve = (
                     entry * (1 - t) ** 2
                     + corner * 2 * (1 - t) * t
