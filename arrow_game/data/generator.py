@@ -145,7 +145,11 @@ class DependencyMetrics:
     arrow_count: int
     edge_count: int
     initial_safe_count: int
+    constrained_count: int
     cross_direction_edges: int
+    same_direction_only_count: int
+    same_direction_first_count: int
+    longest_same_direction_chain: int
     largest_component_size: int
 
     @property
@@ -159,6 +163,18 @@ class DependencyMetrics:
     @property
     def cross_direction_ratio(self) -> float:
         return self.cross_direction_edges / self.edge_count if self.edge_count else 0.0
+
+    @property
+    def same_direction_only_ratio(self) -> float:
+        if not self.constrained_count:
+            return 0.0
+        return self.same_direction_only_count / self.constrained_count
+
+    @property
+    def same_direction_first_ratio(self) -> float:
+        if not self.constrained_count:
+            return 0.0
+        return self.same_direction_first_count / self.constrained_count
 
     @property
     def largest_component_ratio(self) -> float:
@@ -178,7 +194,10 @@ class LevelQualityPolicy:
     max_repeated_shape_ratio: float = 0.2
     min_average_dependencies: float = 2.0
     max_initial_safe_ratio: float = 0.2
-    min_cross_direction_dependency_ratio: float = 0.55
+    min_cross_direction_dependency_ratio: float = 0.65
+    max_same_direction_only_ratio: float = 0.1
+    max_same_direction_first_ratio: float = 0.4
+    max_same_direction_chain: int = 3
     min_largest_dependency_component_ratio: float = 0.9
 
     def accepts(self, level: Level, report: SolveReport) -> bool:
@@ -237,6 +256,21 @@ class LevelQualityPolicy:
         ):
             return False
         if (
+            dependencies.same_direction_only_ratio
+            > self.max_same_direction_only_ratio
+        ):
+            return False
+        if (
+            dependencies.same_direction_first_ratio
+            > self.max_same_direction_first_ratio
+        ):
+            return False
+        if (
+            dependencies.longest_same_direction_chain
+            > self.max_same_direction_chain
+        ):
+            return False
+        if (
             dependencies.largest_component_ratio
             < self.min_largest_dependency_component_ratio
         ):
@@ -261,6 +295,46 @@ class LevelQualityPolicy:
             arrows[source].direction is not arrows[target].direction
             for source, target in edges
         )
+        dependencies_by_source: dict[str, set[str]] = {
+            arrow_id: set() for arrow_id in arrows
+        }
+        for source, target in edges:
+            dependencies_by_source[source].add(target)
+        same_direction_only_count = sum(
+            bool(targets)
+            and all(
+                arrows[source].direction is arrows[target].direction
+                for target in targets
+            )
+            for source, targets in dependencies_by_source.items()
+        )
+        same_direction_first_count = sum(
+            blocker is not None and blocker.direction is arrow.direction
+            for arrow in level.arrows
+            for blocker in (board.first_blocker(arrow),)
+        )
+        same_direction_first = {
+            arrow.arrow_id: blocker.arrow_id
+            for arrow in level.arrows
+            for blocker in (board.first_blocker(arrow),)
+            if blocker is not None and blocker.direction is arrow.direction
+        }
+        longest_same_direction_chain = 0
+        for arrow_id in arrows:
+            visited_in_chain: set[str] = set()
+            current: str | None = arrow_id
+            chain_length = 0
+            while current in same_direction_first and current not in visited_in_chain:
+                visited_in_chain.add(current)
+                chain_length += 1
+                current = same_direction_first[current]
+            if chain_length:
+                # 边数加一才是链条实际包含的箭头数。
+                chain_length += 1
+            longest_same_direction_chain = max(
+                longest_same_direction_chain,
+                chain_length,
+            )
         graph = {arrow_id: set() for arrow_id in arrows}
         for source, target in edges:
             graph[source].add(target)
@@ -287,7 +361,11 @@ class LevelQualityPolicy:
             arrow_count=len(arrows),
             edge_count=len(edges),
             initial_safe_count=len(arrows) - len(constrained),
+            constrained_count=len(constrained),
             cross_direction_edges=cross_direction_edges,
+            same_direction_only_count=same_direction_only_count,
+            same_direction_first_count=same_direction_first_count,
+            longest_same_direction_chain=longest_same_direction_chain,
             largest_component_size=largest_component,
         )
 
@@ -364,6 +442,7 @@ class SerpentineLevelGenerator:
                         spec.boundary_break_chance,
                         spec.shape_mix,
                         spec.shape_limits,
+                        spec.coverage_pattern is CoveragePattern.GLOBAL_WEAVE,
                         randomizer,
                     )
                 )
@@ -444,16 +523,17 @@ class SerpentineLevelGenerator:
                 cursor = (cursor[0] + step[0], cursor[1] + step[1])
             return True
 
-        def dependency_ids(index: int, cells: tuple[Cell, ...]) -> set[int]:
+        def dependency_ids(index: int, cells: tuple[Cell, ...]) -> list[int]:
             """返回该方向射线上已经安排为更早移除的箭头。"""
             head = cells[-1]
             step = exit_step(cells)
             cursor = (head[0] + step[0], head[1] + step[1])
-            dependencies: set[int] = set()
+            dependencies: list[int] = []
             while layout.contains(cursor):
                 owner = all_owners.get(cursor)
                 if owner is not None and owner != index and owner not in remaining:
-                    dependencies.add(owner)
+                    if owner not in dependencies:
+                        dependencies.append(owner)
                 cursor = (cursor[0] + step[0], cursor[1] + step[1])
             return dependencies
 
@@ -471,7 +551,7 @@ class SerpentineLevelGenerator:
 
             def candidate_score(
                 candidate: tuple[int, tuple[Cell, ...]],
-            ) -> tuple[int, int, int, int]:
+            ) -> tuple[int, int, float, int, int, int, int]:
                 index, cells = candidate
                 step = exit_step(cells)
                 dependencies = dependency_ids(index, cells)
@@ -479,9 +559,19 @@ class SerpentineLevelGenerator:
                     oriented_steps[dependency] != step
                     for dependency in dependencies
                 )
+                first_is_cross_direction = bool(dependencies) and (
+                    oriented_steps[dependencies[0]] != step
+                )
+                same_direction = len(dependencies) - cross_direction
+                cross_ratio = (
+                    cross_direction / len(dependencies) if dependencies else 0.0
+                )
                 return (
                     int(bool(dependencies)),
+                    int(first_is_cross_direction),
+                    cross_ratio,
                     cross_direction,
+                    -same_direction,
                     len(dependencies),
                     -direction_counts[step],
                 )
@@ -521,10 +611,15 @@ class SerpentineLevelGenerator:
         elif spec.coverage_pattern is CoveragePattern.GLOBAL_WEAVE:
             global_path = self._whole_board_path(layout, randomizer)
             if global_path is not None:
+                mixed_path = self._mix_path(
+                    global_path,
+                    len(global_path) * spec.path_mix_factor,
+                    randomizer,
+                )
                 return (
-                    self._mix_path(
-                        global_path,
-                        len(global_path) * spec.path_mix_factor,
+                    self._break_long_runs(
+                        mixed_path,
+                        spec.shape_limits.max_straight_length,
                         randomizer,
                     ),
                 )
@@ -904,16 +999,18 @@ class SerpentineLevelGenerator:
         steps: float,
         randomizer: random.Random,
     ) -> tuple[Cell, ...]:
-        """用 backbite 变换打散规则蛇形，同时保持全覆盖和连续性。
+        """从随机端点执行 backbite 变换，同时保持全覆盖和连续性。
 
-        每次把路径起点接到一个相邻的内部节点，并翻转二者之间的路径片段。
-        变换不会增删格子，也不会破坏相邻关系；末端及末段保持不变，因此最终
-        箭头仍天然朝向棋盘外。相比完全回溯搜索，这种方式耗时稳定。
+        每次随机选择一个端点，把它接到相邻内部节点并翻转路径片段。双端混合
+        避免棋盘远端保留原始蛇形条带；变换不会增删格子或破坏相邻关系。
         """
         mixed = list(path)
         positions = {cell: index for index, cell in enumerate(mixed)}
 
         for _ in range(round(steps)):
+            if randomizer.choice((True, False)):
+                mixed.reverse()
+                positions = {cell: index for index, cell in enumerate(mixed)}
             row, col = mixed[0]
             neighbours = (
                 (row - 1, col),
@@ -935,6 +1032,101 @@ class SerpentineLevelGenerator:
             for index in range(cut):
                 positions[mixed[index]] = index
 
+        # 再用局部 2-opt 把相邻的平行边换成垂直边。与只移动端点的
+        # backbite 相比，它能直接打断棋盘内部残留的长直线走廊。
+        positions = {cell: index for index, cell in enumerate(mixed)}
+        for _ in range(round(steps)):
+            first_index = randomizer.randrange(len(mixed) - 1)
+            first, second = mixed[first_index], mixed[first_index + 1]
+            step = second[0] - first[0], second[1] - first[1]
+            perpendiculars = ((step[1], -step[0]), (-step[1], step[0]))
+            p_row, p_col = randomizer.choice(perpendiculars)
+            third = first[0] + p_row, first[1] + p_col
+            fourth = second[0] + p_row, second[1] + p_col
+            third_index = positions.get(third)
+            if (
+                third_index is None
+                or third_index + 1 >= len(mixed)
+                or mixed[third_index + 1] != fourth
+                or abs(first_index - third_index) <= 1
+            ):
+                continue
+
+            left = min(first_index, third_index) + 1
+            right = max(first_index, third_index) + 1
+            mixed[left:right] = reversed(mixed[left:right])
+            for index in range(left, right):
+                positions[mixed[index]] = index
+
+        return tuple(mixed)
+
+    @staticmethod
+    def _break_long_runs(
+        path: tuple[Cell, ...],
+        maximum_cells: int,
+        randomizer: random.Random,
+    ) -> tuple[Cell, ...]:
+        """用定向 2-opt 反复打断过长直线，避免之后被切成同向箭头链。"""
+        mixed = list(path)
+        positions = {cell: index for index, cell in enumerate(mixed)}
+
+        def long_runs() -> list[tuple[int, int]]:
+            runs: list[tuple[int, int]] = []
+            start = 0
+            previous_step: tuple[int, int] | None = None
+            for edge_index, (first, second) in enumerate(zip(mixed, mixed[1:])):
+                step = second[0] - first[0], second[1] - first[1]
+                if previous_step is not None and step != previous_step:
+                    if edge_index - start + 1 > maximum_cells:
+                        runs.append((start, edge_index - 1))
+                    start = edge_index
+                previous_step = step
+            if len(mixed) - start > maximum_cells:
+                runs.append((start, len(mixed) - 2))
+            return runs
+
+        for _ in range(len(mixed) * 6):
+            runs = long_runs()
+            if not runs:
+                break
+            randomizer.shuffle(runs)
+            changed = False
+            for run_start, run_end in runs:
+                edge_indices = list(range(run_start, run_end + 1))
+                randomizer.shuffle(edge_indices)
+                for first_index in edge_indices:
+                    first, second = mixed[first_index], mixed[first_index + 1]
+                    step = second[0] - first[0], second[1] - first[1]
+                    perpendiculars = [
+                        (step[1], -step[0]),
+                        (-step[1], step[0]),
+                    ]
+                    randomizer.shuffle(perpendiculars)
+                    for p_row, p_col in perpendiculars:
+                        third = first[0] + p_row, first[1] + p_col
+                        fourth = second[0] + p_row, second[1] + p_col
+                        third_index = positions.get(third)
+                        if (
+                            third_index is None
+                            or third_index + 1 >= len(mixed)
+                            or mixed[third_index + 1] != fourth
+                            or abs(first_index - third_index) <= 1
+                        ):
+                            continue
+                        left = min(first_index, third_index) + 1
+                        right = max(first_index, third_index) + 1
+                        mixed[left:right] = reversed(mixed[left:right])
+                        for index in range(left, right):
+                            positions[mixed[index]] = index
+                        changed = True
+                        break
+                    if changed:
+                        break
+                if changed:
+                    break
+            if not changed:
+                break
+
         return tuple(mixed)
 
     def _split_path(
@@ -946,6 +1138,7 @@ class SerpentineLevelGenerator:
         boundary_break_chance: float,
         shape_mix: ArrowShapeMix,
         shape_limits: ArrowShapeLimits,
+        prefer_turn_cuts: bool,
         randomizer: random.Random,
     ) -> tuple[tuple[Cell, ...], ...]:
         """在合法位置随机切分路径，并通过回溯保证能完整切到终点。"""
@@ -1014,7 +1207,7 @@ class SerpentineLevelGenerator:
                     start + minimum - 1,
                     min(start + maximum - 1, count - minimum - 1) + 1,
                 )
-                if (is_straight_cut(end) or end in boundary_cuts)
+                if (prefer_turn_cuts or is_straight_cut(end) or end in boundary_cuts)
                 and shape_limits.allows(
                     end - start + 1,
                     turn_category(start, end),
@@ -1028,6 +1221,7 @@ class SerpentineLevelGenerator:
             candidates.sort(
                 key=lambda end: (
                     turn_category(start, end) != desired_shape,
+                    is_straight_cut(end) if prefer_turn_cuts else False,
                     end not in boundary_cuts,
                 )
             )

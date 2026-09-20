@@ -61,7 +61,7 @@ def raised_board_cells(rows: int, cols: int) -> frozenset[tuple[int, int]]:
 # 新增正式关卡只需要增加一条规格，不再逐格编写路径。
 GENERATED_SPECS: tuple[GeneratedLevelSpec, ...] = (
     GeneratedLevelSpec(
-        "初级回路", 22, 16, seed=20260921,
+        "初级回路", 22, 16, seed=20260923,
         min_arrow_length=2, max_arrow_length=16, boundary_break_chance=0.5,
         path_mix_factor=2.0,
         coverage_pattern=CoveragePattern.GLOBAL_WEAVE,
@@ -79,7 +79,7 @@ GENERATED_SPECS: tuple[GeneratedLevelSpec, ...] = (
         vertical_region_ratio=0.55,
     ),
     GeneratedLevelSpec(
-        "密集交织", 30, 20, seed=20261115,
+        "密集交织", 30, 20, seed=20261118,
         min_arrow_length=2, max_arrow_length=18, boundary_break_chance=0.25,
         path_mix_factor=2.0,
         coverage_pattern=CoveragePattern.GLOBAL_WEAVE,
