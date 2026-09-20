@@ -43,6 +43,8 @@ DANGER = DARK_THEME.danger
 
 class ScreenState(Enum):
     START = auto()
+    LEVEL_SELECT = auto()
+    SETTINGS = auto()
     PLAYING = auto()
     LEVEL_COMPLETE = auto()
     FAILED = auto()
@@ -93,6 +95,8 @@ class ArrowGameApp:
         self.assets = assets or EmptyAssetProvider()
 
         self.state = ScreenState.START
+        self.settings_return_state = ScreenState.START
+        self.debug_mode = False
         self.level_index = 0
         self.model = GameSession(LEVELS[0])
         self.animations = AnimationQueue()
@@ -158,9 +162,22 @@ class ArrowGameApp:
             if event.type == pygame.QUIT:
                 self.running = False
             elif event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
-                self.running = False
+                self._handle_escape()
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                 self._handle_click(event.pos)
+
+    def _handle_escape(self) -> None:
+        """在游戏内切出设置；在子页面返回；首页按 Esc 才退出。"""
+        if self.state is ScreenState.PLAYING:
+            self._open_settings()
+        elif self.state is ScreenState.SETTINGS:
+            self.state = self.settings_return_state
+        elif self.state is ScreenState.LEVEL_SELECT:
+            self.state = ScreenState.START
+        elif self.state is ScreenState.START:
+            self.running = False
+        else:
+            self.state = ScreenState.START
 
     def _handle_click(self, pos: tuple[int, int]) -> None:
         for button in self.buttons:
@@ -168,14 +185,19 @@ class ArrowGameApp:
                 self._run_action(button.action)
                 return
 
-        if self.state != ScreenState.PLAYING or self.model.is_over:
+        if self.state != ScreenState.PLAYING:
+            return
+        if self.model.is_cleared or (self.model.is_failed and not self.debug_mode):
             return
         arrow = self._arrow_at_pixel(pos)
         if arrow is None or self.animations.contains(arrow.arrow_id):
             return
 
-        # UI 只把点击的网格交给规则层，不在这里重复编写路径判断。
-        result, _ = self.model.click_cell(arrow.head)
+        # 调试入口与正式规则完全分开；关闭调试后仍由核心规则判断阻挡。
+        if self.debug_mode:
+            result, _ = self.model.remove_cell_for_debug(arrow.head)
+        else:
+            result, _ = self.model.click_cell(arrow.head)
         if result == ClickResult.REMOVED:
             # 箭头越长、距离边界越远，完整抽出需要的动画时间也略长。
             edge_cells = tuple(
@@ -212,6 +234,22 @@ class ArrowGameApp:
     def _run_action(self, action: str) -> None:
         if action == "start":
             self._start_level(0)
+        elif action == "level_select":
+            self.state = ScreenState.LEVEL_SELECT
+        elif action.startswith("level:"):
+            self._start_level(int(action.split(":", 1)[1]))
+        elif action == "settings":
+            self._open_settings()
+        elif action == "settings_back":
+            self.state = self.settings_return_state
+        elif action == "toggle_debug":
+            self.debug_mode = not self.debug_mode
+            if self.debug_mode and self.pending_state is ScreenState.FAILED:
+                self.pending_state = None
+        elif action == "debug_previous":
+            self._start_level(max(0, self.level_index - 1))
+        elif action == "debug_next":
+            self._start_level(min(len(LEVELS) - 1, self.level_index + 1))
         elif action == "restart":
             self._start_level(self.level_index)
         elif action == "next":
@@ -223,7 +261,16 @@ class ArrowGameApp:
         elif action == "quit":
             self.running = False
 
+    def _open_settings(self) -> None:
+        """保存来源页面，设置关闭后能够回到原位置。"""
+        if self.state is ScreenState.SETTINGS:
+            return
+        self.settings_return_state = self.state
+        self.state = ScreenState.SETTINGS
+
     def _update(self, dt: float) -> None:
+        if self.state is not ScreenState.PLAYING:
+            return
         self.animations.update(dt)
         if not self.animations and self.pending_state is not None:
             self.state = self.pending_state
@@ -254,7 +301,12 @@ class ArrowGameApp:
         return self.model.board.arrow_at((row, col))
 
     def _draw(self) -> None:
-        background_key = "start_background" if self.state == ScreenState.START else "game_background"
+        start_pages = {
+            ScreenState.START,
+            ScreenState.LEVEL_SELECT,
+            ScreenState.SETTINGS,
+        }
+        background_key = "start_background" if self.state in start_pages else "game_background"
         background = self.assets.image(background_key)
         if background is None:
             self.screen.fill(BACKGROUND)
@@ -263,6 +315,10 @@ class ArrowGameApp:
         self.buttons = []
         if self.state == ScreenState.START:
             self._draw_start()
+        elif self.state == ScreenState.LEVEL_SELECT:
+            self._draw_level_select()
+        elif self.state == ScreenState.SETTINGS:
+            self._draw_settings()
         elif self.state == ScreenState.PLAYING:
             self._draw_game()
         else:
@@ -289,10 +345,96 @@ class ArrowGameApp:
         for index, line in enumerate(instructions):
             self._draw_text(line, self.font_small, INK, (400, 415 + index * 52))
 
-        button = Button(pygame.Rect(275, 640, 250, 68), "开始游戏", "start")
+        button = Button(pygame.Rect(275, 620, 250, 64), "开始游戏", "start")
         self._draw_button(button, self.font_button)
         self.buttons.append(button)
-        self._draw_text("ESC 退出游戏", self.font_small, MUTED, (400, 790))
+
+        select = Button(
+            pygame.Rect(275, 705, 250, 58), "选择关卡", "level_select", False
+        )
+        self._draw_button(select, self.font_button)
+        self.buttons.append(select)
+        self._draw_gear_button(pygame.Rect(28, 910, 58, 58))
+        self._draw_text("ESC 退出游戏", self.font_small, MUTED, (400, 835))
+
+    def _draw_level_select(self) -> None:
+        """绘制独立关卡选择页，所有已配置关卡都可直接进入。"""
+        self._draw_text("选择关卡", self.font_title, INK, (400, 150))
+        self._draw_text("选择要测试或游玩的棋盘", self.font_body, MUTED, (400, 220))
+
+        button_width = 230
+        button_height = 72
+        gap_x = 32
+        start_x = (WINDOW_SIZE[0] - button_width * 2 - gap_x) // 2
+        for index, _level in enumerate(LEVELS):
+            row, col = divmod(index, 2)
+            rect = pygame.Rect(
+                start_x + col * (button_width + gap_x),
+                300 + row * 98,
+                button_width,
+                button_height,
+            )
+            button = Button(rect, f"第 {index + 1} 关", f"level:{index}", False)
+            self._draw_button(button, self.font_button)
+            self.buttons.append(button)
+
+        back = Button(pygame.Rect(285, 760, 230, 58), "返回", "home", False)
+        self._draw_button(back, self.font_button)
+        self.buttons.append(back)
+
+    def _draw_settings(self) -> None:
+        """绘制全局设置；游戏内打开时额外提供本关控制。"""
+        self._draw_text("设置", self.font_title, INK, (400, 150))
+        debug_text = f"调试模式：{'开' if self.debug_mode else '关'}"
+        debug = Button(pygame.Rect(255, 260, 290, 64), debug_text, "toggle_debug")
+        self._draw_button(debug, self.font_button)
+        self.buttons.append(debug)
+        self._draw_text(
+            "开启后点击任意箭头都可强制飞出",
+            self.font_small,
+            MUTED,
+            (400, 350),
+        )
+
+        if self.settings_return_state is ScreenState.PLAYING:
+            if self.debug_mode:
+                if self.level_index > 0:
+                    previous = Button(
+                        pygame.Rect(150, 425, 235, 58),
+                        "上一关",
+                        "debug_previous",
+                        False,
+                    )
+                    self._draw_button(previous, self.font_button)
+                    self.buttons.append(previous)
+                if self.level_index < len(LEVELS) - 1:
+                    following = Button(
+                        pygame.Rect(415, 425, 235, 58),
+                        "下一关",
+                        "debug_next",
+                        False,
+                    )
+                    self._draw_button(following, self.font_button)
+                    self.buttons.append(following)
+
+            restart = Button(
+                pygame.Rect(255, 530, 290, 60), "重新开始本关", "restart", False
+            )
+            home = Button(
+                pygame.Rect(255, 615, 290, 60), "返回主界面", "home", False
+            )
+            resume = Button(
+                pygame.Rect(255, 700, 290, 64), "继续游戏", "settings_back"
+            )
+            for button in (restart, home, resume):
+                self._draw_button(button, self.font_button)
+                self.buttons.append(button)
+        else:
+            back = Button(
+                pygame.Rect(255, 455, 290, 60), "返回", "settings_back", False
+            )
+            self._draw_button(back, self.font_button)
+            self.buttons.append(back)
 
     def _draw_game(self) -> None:
         self._layout_board()
@@ -304,9 +446,9 @@ class ArrowGameApp:
         )
         self._draw_lives((400, 84), self.model.mistakes_left, level.mistake_limit)
 
-        restart = Button(pygame.Rect(24, 27, 112, 48), "重新开始", "restart", False)
-        self._draw_button(restart, self.font_small)
-        self.buttons.append(restart)
+        self._draw_gear_button(pygame.Rect(24, 27, 54, 54))
+        if self.debug_mode:
+            self._draw_text("DEBUG", self.font_small, PRIMARY, (105, 53))
 
         pygame.draw.line(self.screen, GRID, (0, 112), (WINDOW_SIZE[0], 112), width=2)
         active = self.animations.active
@@ -382,6 +524,21 @@ class ArrowGameApp:
             font,
             background_image=self.assets.image(f"button_{button.action}"),
         )
+
+    def _draw_gear_button(self, rect: pygame.Rect) -> None:
+        """用 Pygame 图元绘制齿轮，避免依赖系统字体中的特殊字符。"""
+        button = Button(rect, "", "settings", False)
+        self._draw_button(button, self.font_small)
+        center = pygame.Vector2(rect.center)
+        for index in range(8):
+            angle = index * math.pi / 4
+            direction = pygame.Vector2(math.cos(angle), math.sin(angle))
+            start = center + direction * 12
+            end = center + direction * 18
+            pygame.draw.line(self.screen, INK, start, end, width=6)
+        pygame.draw.circle(self.screen, INK, rect.center, 13)
+        pygame.draw.circle(self.screen, PANEL, rect.center, 6)
+        self.buttons.append(button)
 
     def _cell_center(self, cell: tuple[int, int]) -> pygame.Vector2:
         row, col = cell

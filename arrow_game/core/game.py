@@ -75,3 +75,15 @@ class GameSession:
         self.mistakes_left -= 1
         return ClickResult.BLOCKED, arrow
 
+    def remove_cell_for_debug(self, cell: Cell) -> tuple[ClickResult, Arrow | None]:
+        """无视阻挡移除箭头，仅供界面调试模式调用。
+
+        该入口与正常点击规则分开，避免测试关卡时临时放宽规则影响正式玩法。
+        即使失误次数已经耗尽，也允许继续检查剩余箭头的动画和布局。
+        """
+        arrow = self.board.arrow_at(cell)
+        if arrow is None:
+            return ClickResult.EMPTY_CELL, None
+        self.board.remove_arrow(arrow.arrow_id)
+        return ClickResult.REMOVED, arrow
+
