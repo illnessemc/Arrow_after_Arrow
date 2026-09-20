@@ -53,6 +53,28 @@ class ArrowShapeMix:
 
 
 @dataclass(frozen=True, slots=True)
+class ArrowShapeLimits:
+    """按转角数量限制长度，防止生成贯穿大半棋盘的直线箭头。"""
+
+    max_straight_length: int = 6
+    max_single_turn_length: int = 14
+
+    def __post_init__(self) -> None:
+        if self.max_straight_length < 2:
+            raise ValueError("直线箭头长度上限不能小于 2")
+        if self.max_single_turn_length < self.max_straight_length:
+            raise ValueError("单转角箭头上限不能短于直线箭头上限")
+
+    def allows(self, length: int, turn_category: int) -> bool:
+        """长直线被拒绝；更长的箭头必须包含至少两个转角。"""
+        if turn_category == 0:
+            return length <= self.max_straight_length
+        if turn_category == 1:
+            return length <= self.max_single_turn_length
+        return True
+
+
+@dataclass(frozen=True, slots=True)
 class GeneratedLevelSpec:
     """生成一关所需的少量参数，替代逐格手写箭头。"""
 
@@ -67,6 +89,7 @@ class GeneratedLevelSpec:
     path_mix_factor: float = 2.0
     coverage_pattern: CoveragePattern = CoveragePattern.INTERLEAVED
     shape_mix: ArrowShapeMix = ArrowShapeMix()
+    shape_limits: ArrowShapeLimits = ArrowShapeLimits()
     nested_region_ratio: float = 0.35
     vertical_region_ratio: float = 0.5
     max_generation_attempts: int = 40
@@ -114,7 +137,7 @@ class GeneratedLevel:
 class LevelQualityPolicy:
     """自动关卡的最低质量门槛，避免生成单一方向的重复堆叠。"""
 
-    min_secondary_axis_ratio: float = 0.3
+    min_secondary_axis_ratio: float = 0.25
     min_bent_arrow_ratio: float = 0.3
     min_short_arrow_ratio: float = 0.1
     min_shape_category_ratio: float = 0.1
@@ -241,6 +264,7 @@ class SerpentineLevelGenerator:
                         layout,
                         spec.boundary_break_chance,
                         spec.shape_mix,
+                        spec.shape_limits,
                         randomizer,
                     )
                 )
@@ -790,6 +814,7 @@ class SerpentineLevelGenerator:
         layout: BoardLayout,
         boundary_break_chance: float,
         shape_mix: ArrowShapeMix,
+        shape_limits: ArrowShapeLimits,
         randomizer: random.Random,
     ) -> tuple[tuple[Cell, ...], ...]:
         """在合法位置随机切分路径，并通过回溯保证能完整切到终点。"""
@@ -835,7 +860,11 @@ class SerpentineLevelGenerator:
         @lru_cache(maxsize=None)
         def partition(start: int) -> tuple[tuple[Cell, ...], ...] | None:
             remaining = count - start
-            if minimum <= remaining <= maximum:
+            remaining_shape = turn_category(start, count - 1)
+            if (
+                minimum <= remaining <= maximum
+                and shape_limits.allows(remaining, remaining_shape)
+            ):
                 return (path[start:],)
 
             candidates = [
@@ -844,7 +873,11 @@ class SerpentineLevelGenerator:
                     start + minimum - 1,
                     min(start + maximum - 1, count - minimum - 1) + 1,
                 )
-                if is_straight_cut(end) or end in boundary_cuts
+                if (is_straight_cut(end) or end in boundary_cuts)
+                and shape_limits.allows(
+                    end - start + 1,
+                    turn_category(start, end),
+                )
             ]
             randomizer.shuffle(candidates)
             desired_shape = shape_mix.choose_turn_category(randomizer)

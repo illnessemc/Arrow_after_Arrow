@@ -98,6 +98,10 @@ lab2/
 四方向数量、三类箭头最低占比、折线占比、短箭头占比、形状重复率和平均可选
 数等质量门槛，避免整关退化成单一构图。
 
+`ArrowShapeLimits` 单独限制不同形状允许达到的长度。当前直线最多 6 格、单转角
+最多 14 格；超过 14 格的箭头必须至少转弯两次。因此较长箭头会形成折线路径，
+不会再出现贯穿大半个棋盘的超长直线。
+
 增加一关只需要追加规格：
 
 ```python
@@ -114,6 +118,10 @@ GeneratedLevelSpec(
         straight=0.3,
         single_turn=0.4,
         multi_turn=0.3,
+    ),
+    shape_limits=ArrowShapeLimits(
+        max_straight_length=6,
+        max_single_turn_length=14,
     ),
     nested_region_ratio=0.35,
     vertical_region_ratio=0.5,

@@ -88,7 +88,7 @@ GENERATED_SPECS: tuple[GeneratedLevelSpec, ...] = (
         vertical_region_ratio=0.5,
     ),
     GeneratedLevelSpec(
-        "异形挑战", 30, 20, seed=20260924,
+        "异形挑战", 30, 20, seed=20261037,
         min_arrow_length=2, max_arrow_length=10, boundary_break_chance=0.2,
         path_mix_factor=2.0,
         coverage_pattern=CoveragePattern.GLOBAL_WEAVE,
