@@ -42,12 +42,15 @@ class Level:
     role: LevelRole = LevelRole.FORMAL
     intro: str = "找出前方没有阻挡的箭头"
     coverage: CoverageMode = CoverageMode.REQUIRE_FULL
+    time_limit_seconds: float = 120.0
 
     def __post_init__(self) -> None:
         if not self.name:
             raise ValueError("关卡名称不能为空")
         if self.mistake_limit <= 0:
             raise ValueError("失误次数必须为正数")
+        if self.time_limit_seconds <= 0:
+            raise ValueError("关卡时限必须大于 0")
         # 复用地图的边界、重复 ID 和格子重叠校验。
         board = self.create_board()
         if self.coverage is CoverageMode.REQUIRE_FULL and board.empty_cells:

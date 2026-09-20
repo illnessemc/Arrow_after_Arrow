@@ -39,6 +39,7 @@ class ManualLevelBuilder:
         intro: str,
         mistake_limit: int = 3,
         require_full_coverage: bool = True,
+        time_limit_seconds: float = 120.0,
     ) -> None:
         self.name = name
         self.layout = layout
@@ -46,6 +47,7 @@ class ManualLevelBuilder:
         self.intro = intro
         self.mistake_limit = mistake_limit
         self.require_full_coverage = require_full_coverage
+        self.time_limit_seconds = time_limit_seconds
         self._arrows: list[Arrow] = []
 
     def add_arrow(self, arrow: Arrow) -> ManualLevelBuilder:
@@ -85,4 +87,5 @@ class ManualLevelBuilder:
             role=self.role,
             intro=self.intro,
             coverage=coverage,
+            time_limit_seconds=self.time_limit_seconds,
         )

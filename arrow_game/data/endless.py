@@ -82,4 +82,5 @@ class EndlessLevelFactory:
                 multi_turn=multi_turn,
             ),
             max_generation_attempts=40,
+            time_limit_seconds=min(240.0, 150.0 + (round_number - 1) * 8.0),
         )

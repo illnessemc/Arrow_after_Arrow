@@ -22,6 +22,7 @@ class HandcraftedLevelSpec:
     rows: int
     cols: int
     paths: tuple[tuple[Cell, ...], ...]
+    time_limit_seconds: float
     shaped: bool = False
 
     def build(self, level_number: int) -> Level:
@@ -41,6 +42,7 @@ class HandcraftedLevelSpec:
             intro="",
             mistake_limit=3,
             require_full_coverage=True,
+            time_limit_seconds=self.time_limit_seconds,
         )
         for index, path in enumerate(self.paths, start=1):
             builder.add_path(f"H{level_number}-{index:03d}", path)
@@ -325,6 +327,7 @@ HANDCRAFTED_SPECS: tuple[HandcraftedLevelSpec, ...] = (
         16,
         12,
         TIDE_CORRIDOR_PATHS,
+        110.0,
     ),
     HandcraftedLevelSpec(
         "四向机关",
@@ -332,6 +335,7 @@ HANDCRAFTED_SPECS: tuple[HandcraftedLevelSpec, ...] = (
         18,
         14,
         FOUR_WAY_MECHANISM_PATHS,
+        125.0,
     ),
     HandcraftedLevelSpec(
         "同心星环",
@@ -339,6 +343,7 @@ HANDCRAFTED_SPECS: tuple[HandcraftedLevelSpec, ...] = (
         20,
         16,
         CONCENTRIC_ORBITS_PATHS,
+        155.0,
     ),
     HandcraftedLevelSpec(
         "虹桥织网",
@@ -346,6 +351,7 @@ HANDCRAFTED_SPECS: tuple[HandcraftedLevelSpec, ...] = (
         22,
         16,
         RAINBOW_WEAVE_PATHS,
+        165.0,
     ),
     HandcraftedLevelSpec(
         "星门终阵",
@@ -353,6 +359,7 @@ HANDCRAFTED_SPECS: tuple[HandcraftedLevelSpec, ...] = (
         24,
         18,
         STAR_GATE_PATHS,
+        180.0,
         shaped=True,
     ),
 )

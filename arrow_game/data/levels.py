@@ -19,6 +19,7 @@ def build_tutorial_level() -> Level:
         intro="",
         mistake_limit=3,
         require_full_coverage=False,
+        time_limit_seconds=60.0,
     )
     # 正确顺序为 T-2 → T-1 → T-4 → T-3 → T-5 → T-6。
     # 依赖链依次展示右、上、左、下四个方向和一支简单折线箭头。

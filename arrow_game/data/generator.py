@@ -99,6 +99,7 @@ class GeneratedLevelSpec:
     vertical_region_ratio: float = 0.5
     max_generation_attempts: int = 40
     playable_cells: frozenset[Cell] | None = None
+    time_limit_seconds: float = 150.0
 
     def __post_init__(self) -> None:
         if self.rows < 4 or self.cols < 4:
@@ -117,6 +118,8 @@ class GeneratedLevelSpec:
             raise ValueError("纵向区域比例必须处于 0~1")
         if self.max_generation_attempts <= 0:
             raise ValueError("生成尝试次数必须为正数")
+        if self.time_limit_seconds <= 0:
+            raise ValueError("关卡时限必须大于 0")
         if self.playable_cells is not None:
             # 交给 BoardLayout 复用边界和空布局校验。
             BoardLayout(self.rows, self.cols, self.playable_cells)
@@ -458,6 +461,7 @@ class SerpentineLevelGenerator:
                 role=LevelRole.FORMAL,
                 intro=f"自动关卡 · {spec.rows}×{spec.cols} · 找到折线的释放顺序",
                 mistake_limit=spec.mistake_limit,
+                time_limit_seconds=spec.time_limit_seconds,
             )
             for index, cells in enumerate(oriented_parts, start=1):
                 builder.add_path(f"P{spec.seed % 1000:03d}-{index:02d}", cells)

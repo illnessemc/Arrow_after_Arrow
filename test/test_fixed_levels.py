@@ -39,6 +39,10 @@ class FixedLevelCatalogTest(unittest.TestCase):
                     tuple(arrow.cells for arrow in level.arrows),
                     spec.paths,
                 )
+                self.assertEqual(
+                    level.time_limit_seconds,
+                    spec.time_limit_seconds,
+                )
 
     def test_all_fixed_levels_are_solvable(self) -> None:
         solver = LevelSolver()
