@@ -19,6 +19,7 @@ from .manual_levels import (
     HANDCRAFTED_SPECS,
     HandcraftedLevelSpec,
 )
+from .score_store import JsonScoreStore, MemoryScoreStore, ScoreStore
 
 __all__ = [
     "ArrowShapeLimits",
@@ -37,6 +38,9 @@ __all__ = [
     "LevelQualityPolicy",
     "LevelBuilder",
     "ManualLevelBuilder",
+    "JsonScoreStore",
+    "MemoryScoreStore",
+    "ScoreStore",
     "SerpentineLevelGenerator",
 ]
 

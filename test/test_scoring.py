@@ -28,10 +28,15 @@ class TimedScoringTest(unittest.TestCase):
             elapsed_seconds=90.0,
             arrow_count=20,
         )
+        medium = rules.calculate(
+            time_limit_seconds=100.0,
+            elapsed_seconds=50.0,
+            arrow_count=20,
+        )
 
         self.assertGreater(fast.score, slow.score)
         self.assertGreater(fast.stars, slow.stars)
-        self.assertEqual((fast.stars, slow.stars), (3, 1))
+        self.assertEqual((fast.stars, medium.stars, slow.stars), (3, 2, 1))
 
     def test_complete_is_idempotent(self) -> None:
         session = TimedScoreSession(60.0, arrow_count=12)

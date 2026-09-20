@@ -23,13 +23,18 @@ class ScoreRules:
     clear_bonus: int = 1000
     points_per_arrow: int = 10
     max_time_bonus: int = 2000
-    two_star_ratio: float = 0.50
-    three_star_ratio: float = 0.75
+    two_star_bonus_ratio: float = 0.30
+    three_star_bonus_ratio: float = 0.65
 
     def __post_init__(self) -> None:
         if min(self.clear_bonus, self.points_per_arrow, self.max_time_bonus) < 0:
             raise ValueError("计分项不能为负数")
-        if not 0 < self.two_star_ratio < self.three_star_ratio <= 1:
+        if not (
+            0
+            < self.two_star_bonus_ratio
+            < self.three_star_bonus_ratio
+            <= 1
+        ):
             raise ValueError("星级阈值必须递增且位于 0～1")
 
     def calculate(
@@ -52,10 +57,15 @@ class ScoreRules:
         time_bonus = round(self.max_time_bonus * remaining_ratio)
         score = base_score + time_bonus
         max_score = base_score + self.max_time_bonus
-        score_ratio = score / max_score
-        if score_ratio >= self.three_star_ratio:
+        three_star_score = base_score + round(
+            self.max_time_bonus * self.three_star_bonus_ratio
+        )
+        two_star_score = base_score + round(
+            self.max_time_bonus * self.two_star_bonus_ratio
+        )
+        if score >= three_star_score:
             stars = 3
-        elif score_ratio >= self.two_star_ratio:
+        elif score >= two_star_score:
             stars = 2
         else:
             stars = 1

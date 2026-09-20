@@ -13,8 +13,21 @@ from typing import Sequence
 
 import pygame
 
-from .core import Arrow, ClickResult, GameSession, Level
-from .data import LEVELS, EndlessLevelFactory
+from .core import (
+    Arrow,
+    ClickResult,
+    GameSession,
+    Level,
+    RoundScore,
+    ScoreLedger,
+    TimedScoreSession,
+)
+from .data import (
+    LEVELS,
+    EndlessLevelFactory,
+    JsonScoreStore,
+    ScoreStore,
+)
 from .ui import (
     COLLISION_RED,
     DARK_THEME,
@@ -90,6 +103,7 @@ class ArrowGameApp:
         *,
         debug_enabled: bool = False,
         endless_factory: EndlessLevelFactory | None = None,
+        score_store: ScoreStore | None = None,
     ) -> None:
         pygame.init()
         pygame.display.set_caption("星箭迷途")
@@ -107,6 +121,7 @@ class ArrowGameApp:
                 pygame.transform.smoothscale(logo, (64, 64))
             )
         self.endless_factory = endless_factory or EndlessLevelFactory()
+        self.score_store = score_store or JsonScoreStore.project_default()
 
         self.state = ScreenState.START
         self.settings_return_state = ScreenState.START
@@ -115,6 +130,12 @@ class ArrowGameApp:
         self.debug_mode = debug_enabled
         self.level_index = 0
         self.model = GameSession(LEVELS[0])
+        self.round_scoring = TimedScoreSession(
+            LEVELS[0].time_limit_seconds,
+            len(LEVELS[0].arrows),
+        )
+        self.last_round_score: RoundScore | None = None
+        self.endless_scores = ScoreLedger(self.score_store.load_high_score())
         self.endless_mode = False
         self.endless_round = 0
         self.endless_seed: int | None = None
@@ -166,6 +187,7 @@ class ArrowGameApp:
 
     def _start_level(self, index: int) -> None:
         """进入固定关卡，同时退出无尽模式。"""
+        self.endless_scores.start_new_run()
         self.endless_mode = False
         self.endless_round = 0
         self.endless_seed = None
@@ -175,7 +197,13 @@ class ArrowGameApp:
 
     def _load_level(self, level: Level, *, color_seed: int) -> None:
         """装载任意来源的关卡，并统一清空上一局的表现状态。"""
+        self.notice = None
         self.model = GameSession(level)
+        self.round_scoring = TimedScoreSession(
+            level.time_limit_seconds,
+            len(level.arrows),
+        )
+        self.last_round_score = None
         self.arrow_colors = assign_arrow_colors(
             level,
             DARK_THEME.arrow_palette,
@@ -241,6 +269,12 @@ class ArrowGameApp:
         self.endless_round = 0
         self.endless_seed = None
         self.model = GameSession(LEVELS[0])
+        self.round_scoring = TimedScoreSession(
+            LEVELS[0].time_limit_seconds,
+            len(LEVELS[0].arrows),
+        )
+        self.last_round_score = None
+        self.endless_scores.start_new_run()
         self.animations.clear()
         self.arrow_colors.clear()
         self._arrow_render_cache.clear()
@@ -307,6 +341,7 @@ class ArrowGameApp:
                 )
             )
             if self.model.is_cleared:
+                self._complete_current_round()
                 if self.endless_mode:
                     self.pending_state = ScreenState.LEVEL_COMPLETE
                 else:
@@ -326,12 +361,14 @@ class ArrowGameApp:
                 )
             )
             if self.model.is_failed:
+                self.round_scoring.fail()
                 self.pending_state = ScreenState.FAILED
 
     def _run_action(self, action: str) -> None:
         if action == "start":
             self._start_level(0)
         elif action == "endless":
+            self.endless_scores.start_new_run()
             self._start_endless_level(1)
         elif action == "endless_next":
             self._start_endless_level(self.endless_round + 1)
@@ -376,10 +413,34 @@ class ArrowGameApp:
     def _update(self, dt: float) -> None:
         if self.state is not ScreenState.PLAYING:
             return
+        # 设置页天然暂停；调试模式也冻结计时，避免检查关卡时产生失败或成绩。
+        if not self.debug_mode:
+            self.round_scoring.update(dt)
+            if self.round_scoring.is_expired and not self.model.is_cleared:
+                self.animations.clear()
+                self.pending_state = None
+                self.notice = "时间耗尽"
+                self.state = ScreenState.FAILED
+                return
         self.animations.update(dt)
         if not self.animations and self.pending_state is not None:
             self.state = self.pending_state
             self.pending_state = None
+
+    def _complete_current_round(self) -> None:
+        """结算当前关；无尽模式再把单关成绩加入累计分。"""
+        self.last_round_score = self.round_scoring.complete()
+        if not self.endless_mode or self.debug_mode:
+            return
+        previous_high = self.endless_scores.high_score
+        self.endless_scores.add_round(self.last_round_score)
+        if self.endless_scores.high_score == previous_high:
+            return
+        try:
+            self.score_store.save_high_score(self.endless_scores.high_score)
+        except OSError:
+            # 存档失败不影响本局流程；内存中的累计分和最高分仍然有效。
+            pass
 
     def _layout_board(self) -> None:
         level = self.model.level
@@ -568,8 +629,31 @@ class ArrowGameApp:
             if self.endless_mode
             else f"第 {self.level_index + 1} 关"
         )
-        self._draw_text(level_title, self.font_subtitle, INK, (400, 42))
+        title_center = (330, 42) if self.endless_mode else (400, 42)
+        self._draw_text(level_title, self.font_subtitle, INK, title_center)
+        if self.endless_mode:
+            self._draw_text(
+                f"分数 {self.endless_scores.current_score}",
+                self.font_small,
+                INK,
+                (600, 31),
+            )
+            self._draw_text(
+                f"最高 {self.endless_scores.high_score}",
+                self.font_small,
+                MUTED,
+                (600, 58),
+            )
         self._draw_lives((400, 84), self.model.mistakes_left, level.mistake_limit)
+        time_color = (
+            DANGER if self.round_scoring.remaining_seconds <= 10 else INK
+        )
+        self._draw_text(
+            f"时间 {self._format_time(self.round_scoring.remaining_seconds)}",
+            self.font_small,
+            time_color,
+            (535, 84),
+        )
 
         self._draw_gear_button(pygame.Rect(24, 27, 54, 54))
         restart = Button(
@@ -681,12 +765,34 @@ class ArrowGameApp:
                 (400, 430),
             )
         else:
-            # 三颗星以中间最大、两侧等距且相反角度的方式对称排列。
-            self._draw_asset("result_star", (300, 455), (78, 78), angle=12)
-            self._draw_asset("result_star", (400, 435), (112, 112))
-            self._draw_asset("result_star", (500, 455), (78, 78), angle=-12)
+            stars = self.last_round_score.stars if self.last_round_score else 1
+            self._draw_result_stars(stars)
+            if self.last_round_score is not None:
+                if self.endless_mode:
+                    score_text = (
+                        f"本关 {self.last_round_score.score}  "
+                        f"累计 {self.endless_scores.current_score}  "
+                        f"最高 {self.endless_scores.high_score}"
+                    )
+                else:
+                    score_text = f"本关得分 {self.last_round_score.score}"
+                self._draw_text(
+                    score_text,
+                    self.font_small,
+                    INK,
+                    (400, 535),
+                )
         if self.notice:
-            self._draw_text(self.notice, self.font_small, DANGER, (400, 535))
+            notice_y = 500 if is_failure else 560
+            self._draw_text(self.notice, self.font_small, DANGER, (400, notice_y))
+        if is_failure and self.endless_mode:
+            self._draw_text(
+                f"累计 {self.endless_scores.current_score}  "
+                f"最高 {self.endless_scores.high_score}",
+                self.font_small,
+                MUTED,
+                (400, 535),
+            )
 
         if is_failure:
             primary = Button(pygame.Rect(245, 585, 310, 72), "重试本关", "restart")
@@ -706,6 +812,33 @@ class ArrowGameApp:
         home = Button(pygame.Rect(255, 680, 290, 64), "返回首页", "home", False)
         self._draw_button(home, self.font_small)
         self.buttons.append(home)
+
+    def _draw_result_stars(self, stars: int) -> None:
+        """按成绩点亮一到三星，同时保持中间大、两侧对称的构图。"""
+        stars = max(1, min(stars, 3))
+        active_indexes = {
+            1: {1},
+            2: {0, 2},
+            3: {0, 1, 2},
+        }[stars]
+        placements = (
+            ((300, 455), (78, 78), 12),
+            ((400, 435), (112, 112), 0),
+            ((500, 455), (78, 78), -12),
+        )
+        for index, (center, size, angle) in enumerate(placements):
+            active = index in active_indexes
+            if self._draw_asset(
+                "result_star",
+                center,
+                size,
+                angle=angle,
+                alpha=255 if active else 45,
+            ):
+                continue
+            symbol = "★" if active else "☆"
+            color = (255, 215, 76) if active else MUTED
+            self._draw_text(symbol, self.font_title, color, center)
 
     def _draw_button(self, button: Button, font: pygame.font.Font) -> None:
         """开始/重试使用主按钮，其余文字按钮使用副按钮。"""
@@ -747,6 +880,7 @@ class ArrowGameApp:
         maximum_size: tuple[int, int],
         *,
         angle: float = 0.0,
+        alpha: int = 255,
     ) -> bool:
         """保持比例绘制素材，并可围绕中心轻微旋转。"""
         image = self.assets.image(key)
@@ -763,6 +897,8 @@ class ArrowGameApp:
         rendered = pygame.transform.smoothscale(image, size)
         if angle:
             rendered = pygame.transform.rotozoom(rendered, angle, 1.0)
+        if alpha < 255:
+            rendered.set_alpha(max(0, alpha))
         self.screen.blit(rendered, rendered.get_rect(center=center))
         return True
 
@@ -1075,6 +1211,13 @@ class ArrowGameApp:
                 break
             empty_distance += 1
         return empty_distance + 0.18
+
+    @staticmethod
+    def _format_time(seconds: float) -> str:
+        """倒计时向上取整，避免还有小数时间时提前显示 00:00。"""
+        total_seconds = max(0, math.ceil(seconds))
+        minutes, seconds_part = divmod(total_seconds, 60)
+        return f"{minutes:02d}:{seconds_part:02d}"
 
     @staticmethod
     def _ease(progress: float) -> float:
