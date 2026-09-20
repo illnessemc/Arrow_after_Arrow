@@ -27,6 +27,7 @@ from .ui import (
 
 WINDOW_SIZE = (800, 1000)
 FPS = 60
+ARROW_RENDER_SCALE = 3
 
 BACKGROUND = DARK_THEME.background
 PANEL = DARK_THEME.panel
@@ -100,6 +101,10 @@ class ArrowGameApp:
         self.cell_size = 0
         self.buttons: list[Button] = []
         self.arrow_colors: dict[str, tuple[int, int, int]] = {}
+        # 静态箭头使用抗锯齿缓存；切关时统一释放，避免反复创建 Surface。
+        self._arrow_render_cache: dict[
+            str, tuple[pygame.Surface, tuple[int, int]]
+        ] = {}
         self.running = True
         self._closed = False
 
@@ -129,6 +134,7 @@ class ArrowGameApp:
         self._closed = True
         self.animations.clear()
         self.arrow_colors.clear()
+        self._arrow_render_cache.clear()
         self.buttons.clear()
         self.assets.clear()
         if pygame.get_init():
@@ -142,6 +148,7 @@ class ArrowGameApp:
             DARK_THEME.arrow_palette,
             seed=20260920 + index,
         )
+        self._arrow_render_cache.clear()
         self.animations.clear()
         self.pending_state = None
         self.state = ScreenState.PLAYING
@@ -304,6 +311,7 @@ class ArrowGameApp:
         pygame.draw.line(self.screen, GRID, (0, 112), (WINDOW_SIZE[0], 112), width=2)
         active = self.animations.active
         animated_id = active.arrow.arrow_id if active else None
+        self._draw_board_dots()
         for arrow in self.model.board.arrows:
             if arrow.arrow_id != animated_id:
                 self._draw_arrow(arrow, self.arrow_colors[arrow.arrow_id])
@@ -319,6 +327,22 @@ class ArrowGameApp:
 
         if active is not None:
             self._draw_animation(active)
+
+    def _draw_board_dots(self) -> None:
+        """只在画面上没有箭头覆盖的可玩格中心绘制棋盘点。
+
+        飞出箭头会在点击时先从逻辑棋盘移除，但它可能仍在动画队列中等待。
+        这些格子要等对应动画真正播放完毕后再显出点，避免点透过箭身出现。
+        """
+        visually_occupied = set(self.model.board.occupied_cells)
+        for animation in self.animations:
+            if animation.kind is AnimationKind.FLY:
+                visually_occupied.update(animation.arrow.cells)
+
+        radius = max(1, round(self.cell_size * 0.055))
+        for cell in self.model.board.layout.playable_cells:
+            if cell not in visually_occupied:
+                pygame.draw.circle(self.screen, GRID, self._cell_center(cell), radius)
 
 
     def _draw_result(self) -> None:
@@ -407,15 +431,60 @@ class ArrowGameApp:
             tail = render_points[0]
             shaft_points = [*render_points, neck]
 
-        # 每段分别绘制并在连接点补圆，形成连续、圆润的折线身体。
-        for start, end in zip(shaft_points, shaft_points[1:]):
-            pygame.draw.line(self.screen, color, start, end, width=width)
-        for joint in shaft_points:
-            pygame.draw.circle(self.screen, color, joint, width // 2 + 1)
-        points = [tip, neck + perpendicular * wing, neck - perpendicular * wing]
-        pygame.draw.polygon(self.screen, color, points)
-        # 尾端比箭身略粗，避免看起来像由字符拼成的细线箭头。
-        pygame.draw.circle(self.screen, color, tail, max(width // 2 + 2, 4))
+        head_points = [tip, neck + perpendicular * wing, neck - perpendicular * wing]
+        cacheable = points is None and offset is None
+        cached = self._arrow_render_cache.get(arrow.arrow_id) if cacheable else None
+        if cached is None:
+            rendered = self._render_arrow_surface(
+                shaft_points,
+                head_points,
+                tail,
+                color,
+                width,
+            )
+            if cacheable:
+                self._arrow_render_cache[arrow.arrow_id] = rendered
+        else:
+            rendered = cached
+        self.screen.blit(rendered[0], rendered[1])
+
+    @staticmethod
+    def _render_arrow_surface(
+        shaft_points: Sequence[pygame.Vector2],
+        head_points: Sequence[pygame.Vector2],
+        tail: pygame.Vector2,
+        color: tuple[int, int, int],
+        width: int,
+    ) -> tuple[pygame.Surface, tuple[int, int]]:
+        """在局部高分辨率画布绘制箭头，再平滑缩小实现抗锯齿。"""
+        geometry = [*shaft_points, *head_points]
+        tail_radius = max(width // 2 + 2, 4)
+        margin = tail_radius + 3
+        left = math.floor(min(point.x for point in geometry) - margin)
+        top = math.floor(min(point.y for point in geometry) - margin)
+        right = math.ceil(max(point.x for point in geometry) + margin)
+        bottom = math.ceil(max(point.y for point in geometry) + margin)
+        target_size = (max(1, right - left), max(1, bottom - top))
+        scale = ARROW_RENDER_SCALE
+        high_size = (target_size[0] * scale, target_size[1] * scale)
+        layer = pygame.Surface(high_size, pygame.SRCALPHA)
+
+        def scaled(point: pygame.Vector2) -> tuple[int, int]:
+            return (
+                round((point.x - left) * scale),
+                round((point.y - top) * scale),
+            )
+
+        high_width = width * scale
+        high_shaft = [scaled(point) for point in shaft_points]
+        for start, end in zip(high_shaft, high_shaft[1:]):
+            pygame.draw.line(layer, color, start, end, width=high_width)
+        for joint in high_shaft:
+            pygame.draw.circle(layer, color, joint, high_width // 2 + scale)
+        pygame.draw.polygon(layer, color, [scaled(point) for point in head_points])
+        pygame.draw.circle(layer, color, scaled(tail), tail_radius * scale)
+
+        return pygame.transform.smoothscale(layer, target_size), (left, top)
 
     @staticmethod
     def _simplify_polyline(
