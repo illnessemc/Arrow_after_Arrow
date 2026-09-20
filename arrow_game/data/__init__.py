@@ -13,7 +13,12 @@ from .generator import (
     LevelQualityPolicy,
     SerpentineLevelGenerator,
 )
-from .levels import GENERATED_LEVELS, LEVELS
+from .levels import LEVELS, LEVEL_REPORTS
+from .manual_levels import (
+    HANDCRAFTED_LEVELS,
+    HANDCRAFTED_SPECS,
+    HandcraftedLevelSpec,
+)
 
 __all__ = [
     "ArrowShapeLimits",
@@ -21,10 +26,13 @@ __all__ = [
     "CoveragePattern",
     "DependencyMetrics",
     "EndlessLevelFactory",
-    "GENERATED_LEVELS",
+    "HANDCRAFTED_LEVELS",
+    "HANDCRAFTED_SPECS",
     "LEVELS",
+    "LEVEL_REPORTS",
     "GeneratedLevel",
     "GeneratedLevelSpec",
+    "HandcraftedLevelSpec",
     "LevelGenerator",
     "LevelQualityPolicy",
     "LevelBuilder",
