@@ -1,6 +1,7 @@
 """关卡数据与可扩展构建接口。"""
 
 from .builders import LevelBuilder, ManualLevelBuilder
+from .endless import EndlessLevelFactory
 from .generator import (
     ArrowShapeLimits,
     ArrowShapeMix,
@@ -19,6 +20,7 @@ __all__ = [
     "ArrowShapeMix",
     "CoveragePattern",
     "DependencyMetrics",
+    "EndlessLevelFactory",
     "GENERATED_LEVELS",
     "LEVELS",
     "GeneratedLevel",

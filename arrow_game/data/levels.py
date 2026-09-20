@@ -1,10 +1,10 @@
-"""关卡目录：一关手工教学关，加上在线确定性生成的正式关卡。
+"""关卡目录：一关稀疏教学关，加上在线确定性生成的正式关卡。
 
 教学关继续显式保存路径，方便讲解和精细调整。正式关只填写尺寸、种子和
 长度范围，实际箭头路径由生成器构造，并在加入目录前通过求解器验证。
 """
 
-from arrow_game.core import BoardLayout, Level, LevelRole, LevelSolver
+from arrow_game.core import BoardLayout, Direction, Level, LevelRole, LevelSolver
 
 from .builders import ManualLevelBuilder
 from .generator import (
@@ -17,31 +17,23 @@ from .generator import (
 
 
 def build_tutorial_level() -> Level:
-    """手工 12×10 教学关：长折线与短箭头交替形成明确依赖。"""
+    """手工稀疏教学关：六支箭头组成唯一且容易观察的移除顺序。"""
     builder = ManualLevelBuilder(
-        "折线入门",
-        BoardLayout.rectangle(12, 10),
+        "方向入门",
+        BoardLayout.rectangle(9, 8),
         role=LevelRole.TUTORIAL,
         intro="",
-        mistake_limit=5,
+        mistake_limit=3,
+        require_full_coverage=False,
     )
-    for pair in range(6):
-        top = pair * 2
-        bottom = top + 1
-        if pair % 2 == 0:
-            long_path = (
-                *((top, col) for col in range(10)),
-                *((bottom, col) for col in range(9, 4, -1)),
-            )
-            short_path = tuple((bottom, col) for col in range(4, -1, -1))
-        else:
-            long_path = (
-                *((top, col) for col in range(9, -1, -1)),
-                *((bottom, col) for col in range(5)),
-            )
-            short_path = tuple((bottom, col) for col in range(5, 10))
-        builder.add_path(f"T-{pair * 2 + 1}", long_path)
-        builder.add_path(f"T-{pair * 2 + 2}", short_path)
+    # 正确顺序为 T-2 → T-1 → T-4 → T-3 → T-5 → T-6。
+    # 依赖链依次展示右、上、左、下四个方向和一支简单折线箭头。
+    builder.add_path("T-1", ((1, 1), (1, 2), (1, 3)))
+    builder.add_path("T-2", ((1, 6),), Direction.UP)
+    builder.add_path("T-3", ((7, 6),), Direction.LEFT)
+    builder.add_path("T-4", ((7, 2),), Direction.UP)
+    builder.add_path("T-5", ((2, 6), (3, 6), (4, 6)))
+    builder.add_path("T-6", ((3, 0), (4, 0), (4, 1)))
     return builder.build()
 
 
@@ -84,6 +76,15 @@ GENERATED_SPECS: tuple[GeneratedLevelSpec, ...] = (
         path_mix_factor=2.0,
         coverage_pattern=CoveragePattern.GLOBAL_WEAVE,
         shape_mix=ArrowShapeMix(straight=0.2, single_turn=0.4, multi_turn=0.4),
+        nested_region_ratio=0.4,
+        vertical_region_ratio=0.5,
+    ),
+    GeneratedLevelSpec(
+        "回环深阵", 28, 20, seed=20261202,
+        min_arrow_length=2, max_arrow_length=16, boundary_break_chance=0.25,
+        path_mix_factor=2.0,
+        coverage_pattern=CoveragePattern.GLOBAL_WEAVE,
+        shape_mix=ArrowShapeMix(straight=0.2, single_turn=0.35, multi_turn=0.45),
         nested_region_ratio=0.4,
         vertical_region_ratio=0.5,
     ),

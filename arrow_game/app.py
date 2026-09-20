@@ -13,8 +13,8 @@ from typing import Sequence
 
 import pygame
 
-from .core import Arrow, ClickResult, GameSession
-from .data import LEVELS
+from .core import Arrow, ClickResult, GameSession, Level
+from .data import LEVELS, EndlessLevelFactory
 from .ui import (
     DARK_THEME,
     AnimationKind,
@@ -82,7 +82,13 @@ class Button:
 
 
 class ArrowGameApp:
-    def __init__(self, assets: AssetProvider | None = None) -> None:
+    def __init__(
+        self,
+        assets: AssetProvider | None = None,
+        *,
+        debug_enabled: bool = False,
+        endless_factory: EndlessLevelFactory | None = None,
+    ) -> None:
         pygame.init()
         pygame.display.set_caption("一箭又一箭")
         self.screen = pygame.display.set_mode(WINDOW_SIZE)
@@ -93,12 +99,19 @@ class ArrowGameApp:
         self.font_title = self._font(58, bold=True)
         self.font_subtitle = self._font(32, bold=True)
         self.assets = assets or EmptyAssetProvider()
+        self.endless_factory = endless_factory or EndlessLevelFactory()
 
         self.state = ScreenState.START
         self.settings_return_state = ScreenState.START
-        self.debug_mode = False
+        # 调试能力只能由命令行显式开启；普通版本既不显示入口，也不能调用。
+        self.debug_enabled = debug_enabled
+        self.debug_mode = debug_enabled
         self.level_index = 0
         self.model = GameSession(LEVELS[0])
+        self.endless_mode = False
+        self.endless_round = 0
+        self.endless_seed: int | None = None
+        self.notice: str | None = None
         self.animations = AnimationQueue()
         self.pending_state: ScreenState | None = None
         self.board_rect = pygame.Rect(0, 0, 0, 0)
@@ -145,17 +158,87 @@ class ArrowGameApp:
             pygame.quit()
 
     def _start_level(self, index: int) -> None:
+        """进入固定关卡，同时退出无尽模式。"""
+        self.endless_mode = False
+        self.endless_round = 0
+        self.endless_seed = None
         self.level_index = index
-        self.model = GameSession(LEVELS[index])
+        self.notice = None
+        self._load_level(LEVELS[index], color_seed=20260920 + index)
+
+    def _load_level(self, level: Level, *, color_seed: int) -> None:
+        """装载任意来源的关卡，并统一清空上一局的表现状态。"""
+        self.model = GameSession(level)
         self.arrow_colors = assign_arrow_colors(
-            self.model.level,
+            level,
             DARK_THEME.arrow_palette,
-            seed=20260920 + index,
+            seed=color_seed,
         )
         self._arrow_render_cache.clear()
         self.animations.clear()
         self.pending_state = None
         self.state = ScreenState.PLAYING
+
+    def _start_endless_level(self, round_number: int) -> bool:
+        """在线生成并进入一关；失败时保留可恢复的界面而不是退出程序。"""
+        self._show_generation_screen(round_number)
+        try:
+            generated = self.endless_factory.generate(round_number)
+        except RuntimeError as error:
+            self.notice = str(error)
+            self.state = (
+                ScreenState.START
+                if round_number == 1
+                else ScreenState.LEVEL_COMPLETE
+            )
+            return False
+
+        self.endless_mode = True
+        self.endless_round = round_number
+        self.endless_seed = generated.seed
+        self.notice = None
+        self._load_level(generated.level, color_seed=generated.seed)
+        return True
+
+    def _show_generation_screen(self, round_number: int) -> None:
+        """在同步生成期间给出明确反馈；后续可替换为完整加载页素材。"""
+        background = self.assets.image("generating_background")
+        if background is None:
+            self.screen.fill(BACKGROUND)
+        else:
+            self.screen.blit(
+                pygame.transform.smoothscale(background, WINDOW_SIZE),
+                (0, 0),
+            )
+        self._draw_text("正在生成无尽关卡", self.font_subtitle, INK, (400, 430))
+        self._draw_text(
+            f"第 {round_number} 关 · 正在验证可通关性",
+            self.font_small,
+            MUTED,
+            (400, 490),
+        )
+        pygame.display.flip()
+        pygame.event.pump()
+
+    def _restart_current_level(self) -> None:
+        """使用当前模板重开；无尽模式不会因为重开而更换随机地图。"""
+        level = self.model.level
+        color_seed = self.endless_seed or (20260920 + self.level_index)
+        self._load_level(level, color_seed=color_seed)
+
+    def _return_home(self) -> None:
+        """退出当前流程并释放动态关卡与表现缓存。"""
+        self.state = ScreenState.START
+        self.level_index = 0
+        self.endless_mode = False
+        self.endless_round = 0
+        self.endless_seed = None
+        self.model = GameSession(LEVELS[0])
+        self.animations.clear()
+        self.arrow_colors.clear()
+        self._arrow_render_cache.clear()
+        self.pending_state = None
+        self.notice = None
 
     def _handle_events(self) -> None:
         for event in pygame.event.get():
@@ -173,11 +256,11 @@ class ArrowGameApp:
         elif self.state is ScreenState.SETTINGS:
             self.state = self.settings_return_state
         elif self.state is ScreenState.LEVEL_SELECT:
-            self.state = ScreenState.START
+            self._return_home()
         elif self.state is ScreenState.START:
             self.running = False
         else:
-            self.state = ScreenState.START
+            self._return_home()
 
     def _handle_click(self, pos: tuple[int, int]) -> None:
         for button in self.buttons:
@@ -194,7 +277,7 @@ class ArrowGameApp:
             return
 
         # 调试入口与正式规则完全分开；关闭调试后仍由核心规则判断阻挡。
-        if self.debug_mode:
+        if self.debug_enabled and self.debug_mode:
             result, _ = self.model.remove_cell_for_debug(arrow.head)
         else:
             result, _ = self.model.click_cell(arrow.head)
@@ -214,11 +297,14 @@ class ArrowGameApp:
                 )
             )
             if self.model.is_cleared:
-                self.pending_state = (
-                    ScreenState.GAME_COMPLETE
-                    if self.level_index == len(LEVELS) - 1
-                    else ScreenState.LEVEL_COMPLETE
-                )
+                if self.endless_mode:
+                    self.pending_state = ScreenState.LEVEL_COMPLETE
+                else:
+                    self.pending_state = (
+                        ScreenState.GAME_COMPLETE
+                        if self.level_index == len(LEVELS) - 1
+                        else ScreenState.LEVEL_COMPLETE
+                    )
         elif result == ClickResult.BLOCKED:
             self.animations.append(
                 ArrowAnimation(
@@ -234,6 +320,10 @@ class ArrowGameApp:
     def _run_action(self, action: str) -> None:
         if action == "start":
             self._start_level(0)
+        elif action == "endless":
+            self._start_endless_level(1)
+        elif action == "endless_next":
+            self._start_endless_level(self.endless_round + 1)
         elif action == "level_select":
             self.state = ScreenState.LEVEL_SELECT
         elif action.startswith("level:"):
@@ -243,21 +333,25 @@ class ArrowGameApp:
         elif action == "settings_back":
             self.state = self.settings_return_state
         elif action == "toggle_debug":
-            self.debug_mode = not self.debug_mode
-            if self.debug_mode and self.pending_state is ScreenState.FAILED:
-                self.pending_state = None
+            if self.debug_enabled:
+                self.debug_mode = not self.debug_mode
+                if self.debug_mode and self.pending_state is ScreenState.FAILED:
+                    self.pending_state = None
         elif action == "debug_previous":
-            self._start_level(max(0, self.level_index - 1))
+            if self.debug_enabled and self.debug_mode:
+                self._start_level(max(0, self.level_index - 1))
         elif action == "debug_next":
-            self._start_level(min(len(LEVELS) - 1, self.level_index + 1))
+            if self.debug_enabled and self.debug_mode:
+                self._start_level(min(len(LEVELS) - 1, self.level_index + 1))
+        elif action == "debug_endless_next":
+            if self.debug_enabled and self.debug_mode and self.endless_mode:
+                self._start_endless_level(self.endless_round + 1)
         elif action == "restart":
-            self._start_level(self.level_index)
+            self._restart_current_level()
         elif action == "next":
             self._start_level(self.level_index + 1)
         elif action == "home":
-            self.state = ScreenState.START
-            self.animations.clear()
-            self.pending_state = None
+            self._return_home()
         elif action == "quit":
             self.running = False
 
@@ -301,13 +395,22 @@ class ArrowGameApp:
         return self.model.board.arrow_at((row, col))
 
     def _draw(self) -> None:
-        start_pages = {
-            ScreenState.START,
+        background_keys = {
+            ScreenState.START: "start_background",
+            ScreenState.LEVEL_SELECT: "level_select_background",
+            ScreenState.SETTINGS: "settings_background",
+            ScreenState.PLAYING: "game_background",
+            ScreenState.LEVEL_COMPLETE: "result_background",
+            ScreenState.FAILED: "failed_background",
+            ScreenState.GAME_COMPLETE: "result_background",
+        }
+        background_key = background_keys[self.state]
+        background = self.assets.image(background_key)
+        if background is None and self.state in {
             ScreenState.LEVEL_SELECT,
             ScreenState.SETTINGS,
-        }
-        background_key = "start_background" if self.state in start_pages else "game_background"
-        background = self.assets.image(background_key)
+        }:
+            background = self.assets.image("start_background")
         if background is None:
             self.screen.fill(BACKGROUND)
         else:
@@ -345,17 +448,25 @@ class ArrowGameApp:
         for index, line in enumerate(instructions):
             self._draw_text(line, self.font_small, INK, (400, 415 + index * 52))
 
-        button = Button(pygame.Rect(275, 620, 250, 64), "开始游戏", "start")
+        button = Button(pygame.Rect(275, 595, 250, 64), "开始游戏", "start")
         self._draw_button(button, self.font_button)
         self.buttons.append(button)
 
         select = Button(
-            pygame.Rect(275, 705, 250, 58), "选择关卡", "level_select", False
+            pygame.Rect(275, 680, 250, 58), "选择关卡", "level_select", False
         )
         self._draw_button(select, self.font_button)
         self.buttons.append(select)
+        endless = Button(
+            pygame.Rect(275, 760, 250, 58), "无尽模式", "endless", False
+        )
+        self._draw_button(endless, self.font_button)
+        self.buttons.append(endless)
         self._draw_gear_button(pygame.Rect(28, 910, 58, 58))
-        self._draw_text("ESC 退出游戏", self.font_small, MUTED, (400, 835))
+        if self.notice:
+            self._draw_text(self.notice, self.font_small, DANGER, (400, 858))
+        else:
+            self._draw_text("ESC 退出游戏", self.font_small, MUTED, (400, 858))
 
     def _draw_level_select(self) -> None:
         """绘制独立关卡选择页，所有已配置关卡都可直接进入。"""
@@ -385,19 +496,29 @@ class ArrowGameApp:
     def _draw_settings(self) -> None:
         """绘制全局设置；游戏内打开时额外提供本关控制。"""
         self._draw_text("设置", self.font_title, INK, (400, 150))
-        debug_text = f"调试模式：{'开' if self.debug_mode else '关'}"
-        debug = Button(pygame.Rect(255, 260, 290, 64), debug_text, "toggle_debug")
-        self._draw_button(debug, self.font_button)
-        self.buttons.append(debug)
-        self._draw_text(
-            "开启后点击任意箭头都可强制飞出",
-            self.font_small,
-            MUTED,
-            (400, 350),
-        )
+        if self.debug_enabled:
+            debug_text = f"调试模式：{'开' if self.debug_mode else '关'}"
+            debug = Button(
+                pygame.Rect(255, 240, 290, 64), debug_text, "toggle_debug"
+            )
+            self._draw_button(debug, self.font_button)
+            self.buttons.append(debug)
+            self._draw_text(
+                "开启后点击任意箭头都可强制飞出",
+                self.font_small,
+                MUTED,
+                (400, 330),
+            )
+        else:
+            self._draw_text(
+                "普通版本 · 按 Esc 可随时返回游戏",
+                self.font_small,
+                MUTED,
+                (400, 275),
+            )
 
         if self.settings_return_state is ScreenState.PLAYING:
-            if self.debug_mode:
+            if self.debug_enabled and self.debug_mode and not self.endless_mode:
                 if self.level_index > 0:
                     previous = Button(
                         pygame.Rect(150, 425, 235, 58),
@@ -416,6 +537,15 @@ class ArrowGameApp:
                     )
                     self._draw_button(following, self.font_button)
                     self.buttons.append(following)
+            elif self.debug_enabled and self.debug_mode and self.endless_mode:
+                following = Button(
+                    pygame.Rect(282, 425, 235, 58),
+                    "跳过本关",
+                    "debug_endless_next",
+                    False,
+                )
+                self._draw_button(following, self.font_button)
+                self.buttons.append(following)
 
             restart = Button(
                 pygame.Rect(255, 530, 290, 60), "重新开始本关", "restart", False
@@ -440,15 +570,28 @@ class ArrowGameApp:
         self._layout_board()
         level = self.model.level
 
-        self._draw_text(f"第 {self.level_index + 1} 关", self.font_subtitle, INK, (400, 42))
+        level_title = (
+            f"无尽 {self.endless_round}"
+            if self.endless_mode
+            else f"第 {self.level_index + 1} 关"
+        )
+        self._draw_text(level_title, self.font_subtitle, INK, (400, 42))
         self._draw_text(
             f"剩余 {self.model.remaining_arrows}", self.font_small, MUTED, (675, 44)
         )
         self._draw_lives((400, 84), self.model.mistakes_left, level.mistake_limit)
 
         self._draw_gear_button(pygame.Rect(24, 27, 54, 54))
-        if self.debug_mode:
-            self._draw_text("DEBUG", self.font_small, PRIMARY, (105, 53))
+        restart = Button(
+            pygame.Rect(88, 27, 112, 54),
+            "重新开始",
+            "restart",
+            False,
+        )
+        self._draw_button(restart, self.font_small)
+        self.buttons.append(restart)
+        if self.debug_enabled and self.debug_mode:
+            self._draw_text("DEBUG", self.font_small, PRIMARY, (245, 53))
 
         pygame.draw.line(self.screen, GRID, (0, 112), (WINDOW_SIZE[0], 112), width=2)
         active = self.animations.active
@@ -522,24 +665,57 @@ class ArrowGameApp:
     def _draw_result(self) -> None:
         is_failure = self.state == ScreenState.FAILED
         is_final = self.state == ScreenState.GAME_COMPLETE
+        is_endless_complete = (
+            self.endless_mode and self.state == ScreenState.LEVEL_COMPLETE
+        )
         accent = DANGER if is_failure else SUCCESS
         icon = "×" if is_failure else "✓"
-        heading = "本关失败" if is_failure else ("全部通关！" if is_final else "顺利过关！")
+        heading = (
+            "本关失败"
+            if is_failure
+            else (
+                f"无尽第 {self.endless_round} 关完成"
+                if is_endless_complete
+                else ("六关全部通关！" if is_final else "顺利过关！")
+            )
+        )
         detail = (
             "失误机会已经用完，再观察一下箭头方向吧"
             if is_failure
-            else ("全部关卡已完成，你已经掌握核心玩法" if is_final else "所有箭头都飞出了棋盘")
+            else (
+                "下一关将使用新的随机种子在线生成"
+                if is_endless_complete
+                else (
+                    "固定关卡已完成，可以继续挑战无尽模式"
+                    if is_final
+                    else "所有箭头都飞出了棋盘"
+                )
+            )
         )
 
         pygame.draw.circle(self.screen, accent, (400, 245), 72)
-        self._draw_text(icon, self.font_title, INK, (400, 235))
+        result_icon_key = "result_failed_icon" if is_failure else "result_complete_icon"
+        result_icon = self.assets.image(result_icon_key)
+        if result_icon is None:
+            self._draw_text(icon, self.font_title, INK, (400, 235))
+        else:
+            image = pygame.transform.smoothscale(result_icon, (112, 112))
+            self.screen.blit(image, image.get_rect(center=(400, 245)))
         self._draw_text(heading, self.font_title, INK, (400, 380))
         self._draw_text(detail, self.font_body, MUTED, (400, 450))
+        if self.notice:
+            self._draw_text(self.notice, self.font_small, DANGER, (400, 495))
 
         if is_failure:
             primary = Button(pygame.Rect(275, 550, 250, 62), "重试本关", "restart")
+        elif is_endless_complete:
+            primary = Button(
+                pygame.Rect(275, 550, 250, 62), "继续挑战", "endless_next"
+            )
         elif is_final:
-            primary = Button(pygame.Rect(275, 550, 250, 62), "再玩一次", "start")
+            primary = Button(
+                pygame.Rect(275, 550, 250, 62), "进入无尽模式", "endless"
+            )
         else:
             primary = Button(pygame.Rect(275, 550, 250, 62), "下一关", "next")
         self._draw_button(primary, self.font_button)
@@ -558,9 +734,16 @@ class ArrowGameApp:
         )
 
     def _draw_gear_button(self, rect: pygame.Rect) -> None:
-        """用 Pygame 图元绘制齿轮，避免依赖系统字体中的特殊字符。"""
+        """优先绘制设置图标素材；缺省时使用 Pygame 图元齿轮。"""
         button = Button(rect, "", "settings", False)
         self._draw_button(button, self.font_small)
+        gear_image = self.assets.image("icon_settings")
+        if gear_image is not None:
+            size = max(24, rect.width - 18)
+            image = pygame.transform.smoothscale(gear_image, (size, size))
+            self.screen.blit(image, image.get_rect(center=rect.center))
+            self.buttons.append(button)
+            return
         center = pygame.Vector2(rect.center)
         for index in range(8):
             angle = index * math.pi / 4
