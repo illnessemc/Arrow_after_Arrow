@@ -2,6 +2,7 @@
 
 from .builders import LevelBuilder, ManualLevelBuilder
 from .generator import (
+    CoveragePattern,
     GeneratedLevel,
     GeneratedLevelSpec,
     LevelGenerator,
@@ -11,6 +12,7 @@ from .generator import (
 from .levels import GENERATED_LEVELS, LEVELS
 
 __all__ = [
+    "CoveragePattern",
     "GENERATED_LEVELS",
     "LEVELS",
     "GeneratedLevel",

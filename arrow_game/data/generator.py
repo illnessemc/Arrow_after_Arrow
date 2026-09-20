@@ -1,14 +1,16 @@
 """可配置的在线关卡生成器。
 
-生成过程先铺出覆盖全棋盘的蛇形 Hamilton 路径，再在合法位置随机切分。
-连续切口形成稳定的依赖链，少量朝向边界的切口产生多个可选入口；最终再由
-求解器独立验证关卡。固定种子保证同一关每次启动完全一致。
+生成器支持交错条带和由外向内的嵌套环两类全覆盖构图，再在合法位置切分为
+长短不一的折线箭头。所有候选都由求解器独立验证，固定种子保证同一关每次
+启动完全一致。
 """
 
 from __future__ import annotations
 
 import random
+from collections import Counter
 from dataclasses import dataclass
+from enum import Enum, auto
 from functools import lru_cache
 from typing import Protocol
 
@@ -17,6 +19,13 @@ from arrow_game.core.direction import Cell
 from arrow_game.core.solver import LevelSolver, SolveReport
 
 from .builders import ManualLevelBuilder
+
+
+class CoveragePattern(Enum):
+    """全覆盖路径的结构类型，便于后续继续增加关卡构图算法。"""
+
+    INTERLEAVED = auto()
+    NESTED_RINGS = auto()
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,6 +41,7 @@ class GeneratedLevelSpec:
     mistake_limit: int = 3
     boundary_break_chance: float = 0.3
     path_mix_factor: int = 2
+    coverage_pattern: CoveragePattern = CoveragePattern.INTERLEAVED
     max_generation_attempts: int = 40
     playable_cells: frozenset[Cell] | None = None
 
@@ -78,6 +88,7 @@ class LevelQualityPolicy:
     min_short_arrow_ratio: float = 0.1
     max_average_choice_ratio: float = 0.18
     min_each_direction: int = 2
+    max_repeated_shape_ratio: float = 0.2
 
     def accepts(self, level: Level, report: SolveReport) -> bool:
         arrow_count = len(level.arrows)
@@ -107,6 +118,14 @@ class LevelQualityPolicy:
         if short / arrow_count < self.min_short_arrow_ratio:
             return False
 
+        # 忽略整体朝向，只比较各直线段长度与左右转序列。这样同一形状旋转后
+        # 仍会被识别为重复，防止整关堆满同长度的 U 形或直线箭头。
+        shape_counts = Counter(
+            self._shape_signature(arrow.cells) for arrow in level.arrows
+        )
+        if max(shape_counts.values()) / arrow_count > self.max_repeated_shape_ratio:
+            return False
+
         return report.average_choices / arrow_count <= self.max_average_choice_ratio
 
     @staticmethod
@@ -123,6 +142,25 @@ class LevelQualityPolicy:
             for index in range(1, len(cells) - 1)
         )
 
+    @staticmethod
+    def _shape_signature(cells: tuple[Cell, ...]) -> tuple[tuple[int, ...], tuple[int, ...]]:
+        """返回与整体旋转无关的形状签名：段长序列和转向序列。"""
+        steps = [
+            (following[0] - current[0], following[1] - current[1])
+            for current, following in zip(cells, cells[1:])
+        ]
+        runs: list[tuple[tuple[int, int], int]] = []
+        for step in steps:
+            if not runs or runs[-1][0] != step:
+                runs.append((step, 1))
+            else:
+                runs[-1] = (step, runs[-1][1] + 1)
+        turns = tuple(
+            first[0] * second[1] - first[1] * second[0]
+            for (first, _), (second, _) in zip(runs, runs[1:])
+        )
+        return tuple(length for _, length in runs), turns
+
 
 class LevelGenerator(Protocol):
     """自动关卡生成器接口，后续算法只需实现相同的入口。"""
@@ -132,7 +170,7 @@ class LevelGenerator(Protocol):
 
 
 class SerpentineLevelGenerator:
-    """生成全覆盖、可复现且保证可解的长折线关卡。"""
+    """生成全覆盖、可复现且保证可解的多结构折线关卡。"""
 
     def __init__(
         self,
@@ -205,6 +243,11 @@ class SerpentineLevelGenerator:
         randomizer: random.Random,
     ) -> tuple[tuple[Cell, ...], ...]:
         """为布局生成一组互不重叠、完整覆盖的连续路径。"""
+        if spec.coverage_pattern is CoveragePattern.NESTED_RINGS:
+            nested_paths = self._nested_ring_paths(layout)
+            if nested_paths is not None:
+                return nested_paths
+
         bands = self._rectangular_bands(layout)
         if bands is not None:
             paths: list[tuple[Cell, ...]] = []
@@ -226,6 +269,48 @@ class SerpentineLevelGenerator:
                 )
             return tuple(paths)
         return self._row_run_paths(layout, randomizer)
+
+    @staticmethod
+    def _nested_ring_paths(
+        layout: BoardLayout,
+    ) -> tuple[tuple[Cell, ...], ...] | None:
+        """把完整矩形逐层剥成向内嵌套的连续环形路径。
+
+        每一层从左边开始绕行，并在左上角以向左的方向结束。外层箭头先
+        飞出后，内层路径才获得出口，因此视觉上的“包围”同时对应真实依赖。
+        单行或单列的中心区域也会生成一条连续路径，不留下空格。
+        """
+        if len(layout.playable_cells) != layout.rows * layout.cols:
+            return None
+
+        paths: list[tuple[Cell, ...]] = []
+        top, bottom = 0, layout.rows - 1
+        left, right = 0, layout.cols - 1
+        layer_index = 0
+        while top <= bottom and left <= right:
+            if top == bottom:
+                path = tuple((top, col) for col in range(right, left - 1, -1))
+                paths.append(path if layer_index % 2 == 0 else tuple(reversed(path)))
+            elif left == right:
+                path = tuple((row, left) for row in range(bottom, top - 1, -1))
+                paths.append(path if layer_index % 2 == 0 else tuple(reversed(path)))
+            else:
+                ring = [
+                    *((row, left) for row in range(top + 1, bottom + 1)),
+                    *((bottom, col) for col in range(left + 1, right + 1)),
+                    *((row, right) for row in range(bottom - 1, top - 1, -1)),
+                    *((top, col) for col in range(right - 1, left - 1, -1)),
+                ]
+                if layer_index % 2:
+                    # 奇数层水平镜像，使相邻环从相反侧打开，减少同构重复。
+                    ring = [(row, left + right - col) for row, col in ring]
+                paths.append(tuple(ring))
+            top += 1
+            bottom -= 1
+            left += 1
+            right -= 1
+            layer_index += 1
+        return tuple(paths)
 
     @staticmethod
     def _rectangular_bands(

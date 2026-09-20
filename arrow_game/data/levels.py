@@ -7,7 +7,12 @@
 from arrow_game.core import BoardLayout, Level, LevelRole, LevelSolver
 
 from .builders import ManualLevelBuilder
-from .generator import GeneratedLevel, GeneratedLevelSpec, SerpentineLevelGenerator
+from .generator import (
+    CoveragePattern,
+    GeneratedLevel,
+    GeneratedLevelSpec,
+    SerpentineLevelGenerator,
+)
 
 
 def build_tutorial_level() -> Level:
@@ -56,8 +61,9 @@ def raised_board_cells(rows: int, cols: int) -> frozenset[tuple[int, int]]:
 GENERATED_SPECS: tuple[GeneratedLevelSpec, ...] = (
     GeneratedLevelSpec(
         "初级回路", 22, 16, seed=20260921,
-        min_arrow_length=2, max_arrow_length=13, boundary_break_chance=0.55,
+        min_arrow_length=2, max_arrow_length=18, boundary_break_chance=0.55,
         path_mix_factor=0,
+        coverage_pattern=CoveragePattern.NESTED_RINGS,
     ),
     GeneratedLevelSpec(
         "折返迷阵", 26, 18, seed=20260922,
@@ -66,8 +72,9 @@ GENERATED_SPECS: tuple[GeneratedLevelSpec, ...] = (
     ),
     GeneratedLevelSpec(
         "密集交织", 30, 20, seed=20260923,
-        min_arrow_length=2, max_arrow_length=18, boundary_break_chance=0.25,
+        min_arrow_length=2, max_arrow_length=24, boundary_break_chance=0.25,
         path_mix_factor=0,
+        coverage_pattern=CoveragePattern.NESTED_RINGS,
     ),
     GeneratedLevelSpec(
         "异形挑战", 30, 20, seed=20260924,
