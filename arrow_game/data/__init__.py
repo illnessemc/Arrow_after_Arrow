@@ -2,6 +2,7 @@
 
 from .builders import LevelBuilder, ManualLevelBuilder
 from .generator import (
+    ArrowShapeMix,
     CoveragePattern,
     GeneratedLevel,
     GeneratedLevelSpec,
@@ -12,6 +13,7 @@ from .generator import (
 from .levels import GENERATED_LEVELS, LEVELS
 
 __all__ = [
+    "ArrowShapeMix",
     "CoveragePattern",
     "GENERATED_LEVELS",
     "LEVELS",

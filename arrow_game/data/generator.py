@@ -1,8 +1,8 @@
 """可配置的在线关卡生成器。
 
-生成器支持交错条带和由外向内的嵌套环两类全覆盖构图，再在合法位置切分为
-长短不一的折线箭头。所有候选都由求解器独立验证，固定种子保证同一关每次
-启动完全一致。
+生成器支持交错条带、由外向内的嵌套环以及多区域混合构图，再按形状权重在
+合法位置切分为长短不一的箭头。所有候选都由求解器独立验证，固定种子保证
+同一关每次启动完全一致。
 """
 
 from __future__ import annotations
@@ -26,6 +26,29 @@ class CoveragePattern(Enum):
 
     INTERLEAVED = auto()
     NESTED_RINGS = auto()
+    MIXED_REGIONS = auto()
+
+
+@dataclass(frozen=True, slots=True)
+class ArrowShapeMix:
+    """切分路径时三类箭头的相对权重，而不是要求精确百分比。"""
+
+    straight: float = 0.3
+    single_turn: float = 0.4
+    multi_turn: float = 0.3
+
+    def __post_init__(self) -> None:
+        weights = (self.straight, self.single_turn, self.multi_turn)
+        if any(weight < 0 for weight in weights) or sum(weights) <= 0:
+            raise ValueError("箭头类型权重不能为负，且至少有一项大于 0")
+
+    def choose_turn_category(self, randomizer: random.Random) -> int:
+        """返回 0、1、2，分别表示直线、单转角和多转角。"""
+        return randomizer.choices(
+            (0, 1, 2),
+            weights=(self.straight, self.single_turn, self.multi_turn),
+            k=1,
+        )[0]
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,6 +65,9 @@ class GeneratedLevelSpec:
     boundary_break_chance: float = 0.3
     path_mix_factor: int = 2
     coverage_pattern: CoveragePattern = CoveragePattern.INTERLEAVED
+    shape_mix: ArrowShapeMix = ArrowShapeMix()
+    nested_region_ratio: float = 0.35
+    vertical_region_ratio: float = 0.5
     max_generation_attempts: int = 40
     playable_cells: frozenset[Cell] | None = None
 
@@ -56,6 +82,10 @@ class GeneratedLevelSpec:
             raise ValueError("边界断链概率必须处于 0~1")
         if self.path_mix_factor < 0:
             raise ValueError("路径混合强度不能为负数")
+        if not 0.0 <= self.nested_region_ratio <= 1.0:
+            raise ValueError("嵌套区域比例必须处于 0~1")
+        if not 0.0 <= self.vertical_region_ratio <= 1.0:
+            raise ValueError("纵向区域比例必须处于 0~1")
         if self.max_generation_attempts <= 0:
             raise ValueError("生成尝试次数必须为正数")
         if self.playable_cells is not None:
@@ -86,6 +116,7 @@ class LevelQualityPolicy:
     min_secondary_axis_ratio: float = 0.3
     min_bent_arrow_ratio: float = 0.3
     min_short_arrow_ratio: float = 0.1
+    min_shape_category_ratio: float = 0.1
     max_average_choice_ratio: float = 0.18
     min_each_direction: int = 2
     max_repeated_shape_ratio: float = 0.2
@@ -116,6 +147,15 @@ class LevelQualityPolicy:
 
         short = sum(len(arrow.cells) <= 4 for arrow in level.arrows)
         if short / arrow_count < self.min_short_arrow_ratio:
+            return False
+
+        shape_categories = Counter(
+            min(self._turn_count(arrow.cells), 2) for arrow in level.arrows
+        )
+        if any(
+            shape_categories[category] / arrow_count < self.min_shape_category_ratio
+            for category in (0, 1, 2)
+        ):
             return False
 
         # 忽略整体朝向，只比较各直线段长度与左右转序列。这样同一形状旋转后
@@ -199,6 +239,7 @@ class SerpentineLevelGenerator:
                         min(spec.max_arrow_length, len(path)),
                         layout,
                         spec.boundary_break_chance,
+                        spec.shape_mix,
                         randomizer,
                     )
                 )
@@ -217,10 +258,7 @@ class SerpentineLevelGenerator:
 
             level = builder.build()
             last_report = self.solver.solve(level)
-            quality_ok = (
-                spec.playable_cells is not None
-                or self.quality_policy.accepts(level, last_report)
-            )
+            quality_ok = self.quality_policy.accepts(level, last_report)
             if last_report.solved and quality_ok:
                 return GeneratedLevel(
                     level=level,
@@ -247,6 +285,10 @@ class SerpentineLevelGenerator:
             nested_paths = self._nested_ring_paths(layout)
             if nested_paths is not None:
                 return nested_paths
+        elif spec.coverage_pattern is CoveragePattern.MIXED_REGIONS:
+            mixed_paths = self._mixed_region_paths(layout, spec, randomizer)
+            if mixed_paths is not None:
+                return mixed_paths
 
         bands = self._rectangular_bands(layout)
         if bands is not None:
@@ -270,6 +312,69 @@ class SerpentineLevelGenerator:
             return tuple(paths)
         return self._row_run_paths(layout, randomizer)
 
+    def _mixed_region_paths(
+        self,
+        layout: BoardLayout,
+        spec: GeneratedLevelSpec,
+        randomizer: random.Random,
+    ) -> tuple[tuple[Cell, ...], ...] | None:
+        """在同一关中混合局部嵌套、横向折返和纵向折返区域。
+
+        区域全部横跨棋盘宽度，路径最终仍可朝左右边界释放；这样获得局部
+        图案变化的同时，不需要为每种图案复制一套特殊碰撞规则。
+        """
+        if len(layout.playable_cells) != layout.rows * layout.cols:
+            return None
+
+        # 用 4~7 行的非等高区域打破固定条带节奏，并确保最后一块不太窄。
+        bands: list[tuple[int, int]] = []
+        top = 0
+        while top < layout.rows:
+            remaining = layout.rows - top
+            if remaining <= 8:
+                height = remaining
+            else:
+                maximum = min(7, remaining - 4)
+                height = randomizer.randint(4, maximum)
+            bands.append((top, top + height))
+            top += height
+
+        nested_count = round(len(bands) * spec.nested_region_ratio)
+        if 0 < spec.nested_region_ratio < 1 and len(bands) > 1:
+            nested_count = min(len(bands) - 1, max(1, nested_count))
+        nested_indices = set(randomizer.sample(range(len(bands)), nested_count))
+
+        paths: list[tuple[Cell, ...]] = []
+        for index, (band_top, band_bottom) in enumerate(bands):
+            if index in nested_indices:
+                paths.extend(
+                    self._nested_rect_paths(
+                        band_top,
+                        band_bottom,
+                        0,
+                        layout.cols,
+                    )
+                )
+                continue
+
+            vertical = randomizer.random() < spec.vertical_region_ratio
+            path = self._rect_path(
+                band_top,
+                band_bottom,
+                0,
+                layout.cols,
+                horizontal=not vertical,
+                randomizer=randomizer,
+            )
+            paths.append(
+                self._mix_path(
+                    path,
+                    len(path) * spec.path_mix_factor,
+                    randomizer,
+                )
+            )
+        return tuple(paths)
+
     @staticmethod
     def _nested_ring_paths(
         layout: BoardLayout,
@@ -283,9 +388,25 @@ class SerpentineLevelGenerator:
         if len(layout.playable_cells) != layout.rows * layout.cols:
             return None
 
+        return SerpentineLevelGenerator._nested_rect_paths(
+            0,
+            layout.rows,
+            0,
+            layout.cols,
+        )
+
+    @staticmethod
+    def _nested_rect_paths(
+        top: int,
+        bottom: int,
+        left: int,
+        right: int,
+    ) -> tuple[tuple[Cell, ...], ...]:
+        """为一个矩形区域生成逐层向内的环，边界参数使用左闭右开。"""
+        bottom -= 1
+        right -= 1
+
         paths: list[tuple[Cell, ...]] = []
-        top, bottom = 0, layout.rows - 1
-        left, right = 0, layout.cols - 1
         layer_index = 0
         while top <= bottom and left <= right:
             if top == bottom:
@@ -471,6 +592,7 @@ class SerpentineLevelGenerator:
         maximum: int,
         layout: BoardLayout,
         boundary_break_chance: float,
+        shape_mix: ArrowShapeMix,
         randomizer: random.Random,
     ) -> tuple[tuple[Cell, ...], ...]:
         """在合法位置随机切分路径，并通过回溯保证能完整切到终点。"""
@@ -490,6 +612,21 @@ class SerpentineLevelGenerator:
             step = (current[0] - previous[0], current[1] - previous[1])
             next_cell = (current[0] + step[0], current[1] + step[1])
             return not layout.contains(next_cell)
+
+        def turn_category(start: int, end: int) -> int:
+            """把候选片段归为直线、单转角或多转角三类。"""
+            turns = 0
+            for index in range(start + 1, end):
+                before = (
+                    path[index][0] - path[index - 1][0],
+                    path[index][1] - path[index - 1][1],
+                )
+                after = (
+                    path[index + 1][0] - path[index][0],
+                    path[index + 1][1] - path[index][1],
+                )
+                turns += before != after
+            return min(turns, 2)
 
         # 在部分边界转角主动断开依赖链，产生多个同时可飞出的候选箭头。
         boundary_cuts = {
@@ -513,8 +650,15 @@ class SerpentineLevelGenerator:
                 if is_straight_cut(end) or end in boundary_cuts
             ]
             randomizer.shuffle(candidates)
-            # 随机顺序相同时优先尝试选中的边界断点，确保参数确实影响分支数。
-            candidates.sort(key=lambda end: end not in boundary_cuts)
+            desired_shape = shape_mix.choose_turn_category(randomizer)
+            # 先匹配本段需要的形状类别；同类别内优先采用选中的边界断点。
+            # 若首选形状无法完成后续切分，回溯仍会尝试其他候选。
+            candidates.sort(
+                key=lambda end: (
+                    turn_category(start, end) != desired_shape,
+                    end not in boundary_cuts,
+                )
+            )
             for end in candidates:
                 tail = partition(end + 1)
                 if tail is not None:
