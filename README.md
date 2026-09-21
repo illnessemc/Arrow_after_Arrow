@@ -91,7 +91,8 @@ python main.py --debug
 
 ### 5. Windows 可执行版
 
-无需安装 Python，双击 `release/StarArrow-v1.0-win64.exe` 即可启动游戏。
+前往 [GitHub Releases](https://github.com/illnessemc/star-arrow/releases) 下载
+`StarArrow-v1.0-win64.exe`。该版本无需安装 Python，双击即可启动游戏。
 
 ## 游戏操作说明
 
@@ -143,7 +144,6 @@ OK
 lab2/
 ├─ main.py                  # 游戏入口与命令行参数
 ├─ requirements.txt         # Python 依赖
-├─ release/                 # Windows 可执行版
 ├─ arrow_game/
 │  ├─ app.py                # Pygame 页面、输入和动画
 │  ├─ core/                 # 箭头、棋盘、规则、求解和计分
