@@ -35,10 +35,16 @@ def build_tutorial_level() -> Level:
 _solver = LevelSolver()
 
 TUTORIAL_LEVEL = build_tutorial_level()
-LEVELS: tuple[Level, ...] = (
+ADVANCED_LEVELS: tuple[Level, ...] = (
     TUTORIAL_LEVEL,
     *HANDCRAFTED_LEVELS,
 )
 
+# ``LEVELS`` 保留为进阶关卡别名，兼容已有代码和外部调用。
+LEVELS = ADVANCED_LEVELS
+
 # 固定关数据变更后立即验证，避免错误路径进入选关界面。
-LEVEL_REPORTS = tuple(_solver.require_solvable(level) for level in LEVELS)
+ADVANCED_LEVEL_REPORTS = tuple(
+    _solver.require_solvable(level) for level in ADVANCED_LEVELS
+)
+LEVEL_REPORTS = ADVANCED_LEVEL_REPORTS

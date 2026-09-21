@@ -1,5 +1,6 @@
 """关卡数据与可扩展构建接口。"""
 
+from .basic_levels import BASIC_LEVEL_REPORTS, BASIC_LEVELS
 from .builders import LevelBuilder, ManualLevelBuilder
 from .endless import EndlessLevelFactory
 from .generator import (
@@ -13,7 +14,12 @@ from .generator import (
     LevelQualityPolicy,
     SerpentineLevelGenerator,
 )
-from .levels import LEVELS, LEVEL_REPORTS
+from .levels import (
+    ADVANCED_LEVEL_REPORTS,
+    ADVANCED_LEVELS,
+    LEVEL_REPORTS,
+    LEVELS,
+)
 from .manual_levels import (
     HANDCRAFTED_LEVELS,
     HANDCRAFTED_SPECS,
@@ -22,8 +28,12 @@ from .manual_levels import (
 from .score_store import JsonScoreStore, MemoryScoreStore, ScoreStore
 
 __all__ = [
+    "ADVANCED_LEVEL_REPORTS",
+    "ADVANCED_LEVELS",
     "ArrowShapeLimits",
     "ArrowShapeMix",
+    "BASIC_LEVEL_REPORTS",
+    "BASIC_LEVELS",
     "CoveragePattern",
     "DependencyMetrics",
     "EndlessLevelFactory",
