@@ -1173,6 +1173,11 @@ class ArrowGameApp:
         else:
             # 被点击箭头保持原色，先向前试探再退回；真正挡路的第一支箭头
             # 使用调色板中不存在的醒目红色并横向震动，直接说明“谁挡住了谁”。
+            self_collision = (
+                animation.collision_target is not None
+                and animation.collision_target.arrow_id
+                == animation.arrow.arrow_id
+            )
             probe = math.sin(progress * math.pi) * animation.movement_cells
             moving_points = self._moved_path_points(animation.arrow, probe)
             clicked_shake = (
@@ -1184,12 +1189,16 @@ class ArrowGameApp:
             ]
             self._draw_arrow(
                 animation.arrow,
-                self.arrow_colors[animation.arrow.arrow_id],
+                (
+                    COLLISION_RED
+                    if self_collision
+                    else self.arrow_colors[animation.arrow.arrow_id]
+                ),
                 points=moving_points,
                 points_are_smoothed=True,
             )
 
-            if animation.collision_target is not None:
+            if animation.collision_target is not None and not self_collision:
                 target_shake = (
                     math.sin(progress * math.pi * 12)
                     * math.sin(progress * math.pi)
@@ -1207,7 +1216,7 @@ class ArrowGameApp:
         empty_distance = 0
         for cell in self.model.board.cells_to_edge(arrow.head, arrow.direction):
             occupant = self.model.board.arrow_at(cell)
-            if occupant is not None and occupant.arrow_id != arrow.arrow_id:
+            if occupant is not None:
                 break
             empty_distance += 1
         return empty_distance + 0.18

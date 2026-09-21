@@ -94,11 +94,14 @@ class GameBoard:
             col += direction.col_step
 
     def first_blocker(self, arrow: Arrow) -> Arrow | None:
-        """返回箭头头部前进方向上的第一支阻挡箭头。"""
+        """返回箭头头部前进方向上的第一支阻挡箭头。
+
+        射线撞到箭头自己的身体时同样返回该箭头。此类折线路径直觉上会被
+        自己的尾部或中段挡住，不能穿过自身飞出棋盘。
+        """
         for cell in self.cells_to_edge(arrow.head, arrow.direction):
             owner_id = self._cell_owners.get(cell)
-            # 排除自身能兼容未来可能绕到头部前方的复杂折线路径。
-            if owner_id is not None and owner_id != arrow.arrow_id:
+            if owner_id is not None:
                 return self._arrows[owner_id]
         return None
 

@@ -522,7 +522,8 @@ class SerpentineLevelGenerator:
             cursor = (head[0] + step[0], head[1] + step[1])
             while layout.contains(cursor):
                 owner = owners.get(cursor)
-                if owner is not None and owner != index:
+                # 当前片段自己的身体也会阻挡头部，不能把自锁路径定向为箭头。
+                if owner is not None:
                     return False
                 cursor = (cursor[0] + step[0], cursor[1] + step[1])
             return True

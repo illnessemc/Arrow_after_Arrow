@@ -116,6 +116,32 @@ class GameplayRequirementsTest(unittest.TestCase):
         self.assertIs(result, ClickResult.REMOVED)
         self.assertTrue(session.is_cleared)
 
+    def test_t07_arrow_is_blocked_by_its_own_body(self) -> None:
+        self_blocking = Arrow(
+            "self-blocking",
+            ((2, 3), (1, 3), (1, 2), (1, 1), (2, 1), (2, 2)),
+            Direction.RIGHT,
+        )
+        level = make_level((self_blocking,), rows=4, cols=5)
+        self.load_app_level(level)
+
+        self.assertIs(self.app.model.blocker_of(self_blocking), self_blocking)
+        self.click_arrow(self_blocking)
+
+        active = self.app.animations.active
+        self.assertIsNotNone(active)
+        assert active is not None
+        self.assertIs(active.kind, AnimationKind.BLOCKED)
+        self.assertIs(active.collision_target, self_blocking)
+        self.assertAlmostEqual(active.movement_cells, 0.18)
+        self.assertIsNotNone(
+            self.app.model.board.get_arrow(self_blocking.arrow_id)
+        )
+        self.assertEqual(
+            self.app.model.mistakes_left,
+            level.mistake_limit - 1,
+        )
+
     def test_t04_clear_level_shows_victory_and_enters_next_level(self) -> None:
         arrow = Arrow.single("last", 0, 0, Direction.UP)
         self.load_app_level(make_level((arrow,), rows=1, cols=1))
