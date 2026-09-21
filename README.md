@@ -89,10 +89,16 @@ python main.py
 python main.py --debug
 ```
 
-### 5. Windows 可执行版
+### 5. Windows 免安装版
 
-前往 [GitHub Releases](https://github.com/illnessemc/star-arrow/releases) 下载
-`StarArrow-v1.0-win64.exe`。该版本无需安装 Python，双击即可启动游戏。
+Windows 64 位用户可直接下载打包版本，无需安装 Python 或 Pygame：
+
+- [查看 v1.0 发行版](https://github.com/illnessemc/star-arrow/releases/tag/v1.0)
+- [下载 `StarArrow-v1.0-win64.exe`](https://github.com/illnessemc/star-arrow/releases/download/v1.0/StarArrow-v1.0-win64.exe)
+- 文件大小：26.54 MiB
+- SHA-256：`BD483D6E9AE3D1EA3D470C1E4E463933BE780E08A41196EAA9918306C58A356C`
+
+下载后双击 EXE 即可启动，游戏最高分会保存在当前 Windows 用户的本地数据目录中。
 
 ## 游戏操作说明
 
@@ -125,7 +131,7 @@ python -m unittest discover -s test -v
 可通关性、倒计时、星级、无尽累计分和最高分存储。全部通过时终端最后显示：
 
 ```text
-Ran 21 tests
+Ran 23 tests
 
 OK
 ```
@@ -145,7 +151,7 @@ lab2/
 ├─ main.py                  # 游戏入口与命令行参数
 ├─ requirements.txt         # Python 依赖
 ├─ arrow_game/
-│  ├─ app.py                # Pygame 页面、输入和动画
+│  ├─ app.py                # 游戏流程、输入处理和动画调度
 │  ├─ core/                 # 箭头、棋盘、规则、求解和计分
 │  ├─ data/                 # 固定关、无尽生成器和最高分存储
 │  └─ ui/                   # 页面、棋盘、主题、素材和动画绘制
