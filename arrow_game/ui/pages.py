@@ -47,12 +47,16 @@ class PageRenderer:
             draw_text(self.surface, "星箭迷途", self.fonts.title, INK, (400, 255))
 
         buttons = [
-            Button(pygame.Rect(245, 440, 310, 76), "开始游戏", "start"),
             Button(
-                pygame.Rect(255, 545, 290, 68),
-                "选择关卡",
-                "level_select",
+                pygame.Rect(255, 440, 290, 68),
+                "基础模式",
+                "basic_mode",
                 False,
+            ),
+            Button(
+                pygame.Rect(245, 535, 310, 76),
+                "进阶模式",
+                "advanced_mode",
             ),
             Button(
                 pygame.Rect(255, 640, 290, 68),
@@ -85,17 +89,21 @@ class PageRenderer:
         )
         return buttons
 
-    def draw_level_select(self, level_count: int) -> list[Button]:
+    def draw_level_select(
+        self,
+        level_count: int,
+        mode_label: str,
+    ) -> list[Button]:
         draw_text(
             self.surface,
-            "选择关卡",
+            mode_label,
             self.fonts.title,
             INK,
             (400, 150),
         )
         draw_text(
             self.surface,
-            "选择要测试或游玩的棋盘",
+            "选择关卡",
             self.fonts.body,
             MUTED,
             (400, 220),
@@ -306,8 +314,8 @@ class PageRenderer:
         elif is_final:
             primary = Button(
                 pygame.Rect(255, 585, 290, 68),
-                "进入无尽模式",
-                "endless",
+                "重新选择关卡",
+                "mode_levels",
             )
         else:
             primary = Button(

@@ -125,8 +125,8 @@ def draw_button(
     button: Button,
     font: pygame.font.Font,
 ) -> None:
-    """开始和重试使用主按钮，其余动作使用副按钮。"""
-    use_primary = button.action in {"start", "restart"}
+    """进阶模式和主要确认动作使用主按钮，其余动作使用副按钮。"""
+    use_primary = button.action in {"advanced_mode", "restart"}
     button.primary = use_primary
     background = assets.image(f"button_{button.action}")
     if background is None:

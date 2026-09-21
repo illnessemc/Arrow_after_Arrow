@@ -20,7 +20,8 @@ from .core import (
     TimedScoreSession,
 )
 from .data import (
-    LEVELS,
+    ADVANCED_LEVELS,
+    BASIC_LEVELS,
     EndlessLevelFactory,
     JsonScoreStore,
     ScoreStore,
@@ -66,6 +67,23 @@ class ScreenState(Enum):
     GAME_COMPLETE = auto()
 
 
+class FixedMode(Enum):
+    """拥有固定选关目录的两种玩法模式。"""
+
+    BASIC = "基础模式"
+    ADVANCED = "进阶模式"
+
+    @property
+    def short_label(self) -> str:
+        return "基础" if self is FixedMode.BASIC else "进阶"
+
+
+FIXED_LEVEL_CATALOGS: dict[FixedMode, tuple[Level, ...]] = {
+    FixedMode.BASIC: BASIC_LEVELS,
+    FixedMode.ADVANCED: ADVANCED_LEVELS,
+}
+
+
 class ArrowGameApp:
     def __init__(
         self,
@@ -101,11 +119,12 @@ class ArrowGameApp:
         # 调试能力只能由命令行显式开启；普通版本既不显示入口，也不能调用。
         self.debug_enabled = debug_enabled
         self.debug_mode = debug_enabled
+        self.fixed_mode = FixedMode.ADVANCED
         self.level_index = 0
-        self.model = GameSession(LEVELS[0])
+        self.model = GameSession(ADVANCED_LEVELS[0])
         self.round_scoring = TimedScoreSession(
-            LEVELS[0].time_limit_seconds,
-            len(LEVELS[0].arrows),
+            ADVANCED_LEVELS[0].time_limit_seconds,
+            len(ADVANCED_LEVELS[0].arrows),
         )
         self.last_round_score: RoundScore | None = None
         self.endless_scores = ScoreLedger(self.score_store.load_high_score())
@@ -144,15 +163,40 @@ class ArrowGameApp:
         if pygame.get_init():
             pygame.quit()
 
+    @property
+    def fixed_levels(self) -> tuple[Level, ...]:
+        """返回当前基础或进阶模式对应的固定关卡目录。"""
+        return FIXED_LEVEL_CATALOGS[self.fixed_mode]
+
+    def _show_fixed_level_select(self, mode: FixedMode) -> None:
+        """选择固定模式后直接进入它的选关页。"""
+        self.fixed_mode = mode
+        self.level_index = 0
+        self.endless_mode = False
+        self.endless_round = 0
+        self.endless_seed = None
+        self.notice = None
+        self.animations.clear()
+        self.pending_state = None
+        self.state = ScreenState.LEVEL_SELECT
+
+    def _fixed_color_seed(self, index: int) -> int:
+        """为两个固定目录提供互不重叠且可复现的配色种子。"""
+        mode_offset = 1000 if self.fixed_mode is FixedMode.BASIC else 0
+        return 20260920 + mode_offset + index
+
     def _start_level(self, index: int) -> None:
-        """进入固定关卡，同时退出无尽模式。"""
+        """进入当前固定模式的关卡，同时退出无尽模式。"""
         self.endless_scores.start_new_run()
         self.endless_mode = False
         self.endless_round = 0
         self.endless_seed = None
         self.level_index = index
         self.notice = None
-        self._load_level(LEVELS[index], color_seed=20260920 + index)
+        self._load_level(
+            self.fixed_levels[index],
+            color_seed=self._fixed_color_seed(index),
+        )
 
     def _load_level(self, level: Level, *, color_seed: int) -> None:
         """装载任意来源的关卡，并统一清空上一局的表现状态。"""
@@ -224,20 +268,25 @@ class ArrowGameApp:
     def _restart_current_level(self) -> None:
         """使用当前模板重开；无尽模式不会因为重开而更换随机地图。"""
         level = self.model.level
-        color_seed = self.endless_seed or (20260920 + self.level_index)
+        color_seed = (
+            self.endless_seed
+            if self.endless_seed is not None
+            else self._fixed_color_seed(self.level_index)
+        )
         self._load_level(level, color_seed=color_seed)
 
     def _return_home(self) -> None:
         """退出当前流程并释放动态关卡与表现缓存。"""
         self.state = ScreenState.START
+        self.fixed_mode = FixedMode.ADVANCED
         self.level_index = 0
         self.endless_mode = False
         self.endless_round = 0
         self.endless_seed = None
-        self.model = GameSession(LEVELS[0])
+        self.model = GameSession(ADVANCED_LEVELS[0])
         self.round_scoring = TimedScoreSession(
-            LEVELS[0].time_limit_seconds,
-            len(LEVELS[0].arrows),
+            ADVANCED_LEVELS[0].time_limit_seconds,
+            len(ADVANCED_LEVELS[0].arrows),
         )
         self.last_round_score = None
         self.endless_scores.start_new_run()
@@ -313,7 +362,7 @@ class ArrowGameApp:
                 else:
                     self.pending_state = (
                         ScreenState.GAME_COMPLETE
-                        if self.level_index == len(LEVELS) - 1
+                        if self.level_index == len(self.fixed_levels) - 1
                         else ScreenState.LEVEL_COMPLETE
                     )
         elif result == ClickResult.BLOCKED:
@@ -334,14 +383,16 @@ class ArrowGameApp:
                 self.pending_state = ScreenState.FAILED
 
     def _run_action(self, action: str) -> None:
-        if action == "start":
-            self._start_level(0)
+        if action == "basic_mode":
+            self._show_fixed_level_select(FixedMode.BASIC)
+        elif action == "advanced_mode":
+            self._show_fixed_level_select(FixedMode.ADVANCED)
         elif action == "endless":
             self.endless_scores.start_new_run()
             self._start_endless_level(1)
         elif action == "endless_next":
             self._start_endless_level(self.endless_round + 1)
-        elif action == "level_select":
+        elif action == "mode_levels":
             self.state = ScreenState.LEVEL_SELECT
         elif action.startswith("level:"):
             self._start_level(int(action.split(":", 1)[1]))
@@ -359,7 +410,9 @@ class ArrowGameApp:
                 self._start_level(max(0, self.level_index - 1))
         elif action == "debug_next":
             if self.debug_enabled and self.debug_mode:
-                self._start_level(min(len(LEVELS) - 1, self.level_index + 1))
+                self._start_level(
+                    min(len(self.fixed_levels) - 1, self.level_index + 1)
+                )
         elif action == "debug_endless_next":
             if self.debug_enabled and self.debug_mode and self.endless_mode:
                 self._start_endless_level(self.endless_round + 1)
@@ -454,7 +507,10 @@ class ArrowGameApp:
         self.buttons = self.pages.draw_start(self.notice, GAME_VERSION)
 
     def _draw_level_select(self) -> None:
-        self.buttons = self.pages.draw_level_select(len(LEVELS))
+        self.buttons = self.pages.draw_level_select(
+            len(self.fixed_levels),
+            self.fixed_mode.value,
+        )
 
     def _draw_settings(self) -> None:
         self.buttons = self.pages.draw_settings(
@@ -463,7 +519,7 @@ class ArrowGameApp:
             from_playing=self.settings_return_state is ScreenState.PLAYING,
             endless_mode=self.endless_mode,
             level_index=self.level_index,
-            level_count=len(LEVELS),
+            level_count=len(self.fixed_levels),
         )
 
     def _draw_game(self) -> None:
@@ -473,7 +529,7 @@ class ArrowGameApp:
         level_title = (
             f"无尽 {self.endless_round}"
             if self.endless_mode
-            else f"第 {self.level_index + 1} 关"
+            else f"{self.fixed_mode.short_label} {self.level_index + 1}"
         )
         title_center = (330, 42) if self.endless_mode else (400, 42)
         draw_text(self.screen, level_title, self.font_subtitle, INK, title_center)
