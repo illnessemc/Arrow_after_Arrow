@@ -130,14 +130,6 @@ Ran 21 tests
 OK
 ```
 
-## 游戏截图
-
-<p align="center">
-  <img src="docs/images/start-screen.png" width="31%" alt="开始界面">
-  <img src="docs/images/game-screen.png" width="31%" alt="无尽模式游戏界面">
-  <img src="docs/images/result-screen.png" width="31%" alt="通关结算界面">
-</p>
-
 ## 项目结构
 
 ```text
@@ -150,6 +142,5 @@ lab2/
 │  ├─ data/                 # 固定关、无尽生成器和最高分存储
 │  └─ ui/                   # 主题、素材接口和动画队列
 ├─ resource/image/          # 游戏美术素材
-├─ docs/images/             # README 游戏截图
 └─ test/                    # 自动化测试
 ```

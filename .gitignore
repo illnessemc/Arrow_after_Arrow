@@ -8,3 +8,4 @@ dist/
 *.spec
 release/
 resource/*项目开发说明书*.md
+docs/
